@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Boxes,
   Layers,
@@ -13,14 +13,15 @@ import {
   Sparkles,
   Cpu
 } from 'lucide-react';
-import { INITIAL_MOVEMENT_HISTORY } from './movementData';
+import { movementApi } from '../../services/api';
 import ExecuteMoveForm from './ExecuteMoveForm';
 import MovementsHistoryTable from './MovementsHistoryTable';
 import Navbar from '../../components/Navbar';
 
 export default function MovementPage() {
-  const [activeTab, setActiveTab] = useState('execute'); // 'execute' | 'history'
-  const [history, setHistory] = useState(INITIAL_MOVEMENT_HISTORY);
+  const [activeTab, setActiveTab] = useState('history'); // 'execute' | 'history'
+  const [history, setHistory] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [toastMessage, setToastMessage] = useState(null);
 
   const showToast = (message, type = 'success') => {
@@ -30,24 +31,28 @@ export default function MovementPage() {
     }, 4000);
   };
 
-  const handleExecuteMove = (mainMove, consumedEntries = []) => {
-    // Append main move and any BOM consumed entries to the history ledger
-    const newHistory = [mainMove, ...consumedEntries, ...history];
-    setHistory(newHistory);
-
-    if (consumedEntries.length > 0) {
-      showToast(
-        `Move ${mainMove.reference} executed! Auto-consumed ${consumedEntries.length} raw material components into ledger.`,
-        'success'
-      );
-    } else {
-      showToast(
-        `Stock transfer ${mainMove.reference} (${mainMove.quantity} ${mainMove.unit} of ${mainMove.productName}) recorded successfully!`,
-        'success'
-      );
+  const fetchMovements = async () => {
+    try {
+      setLoading(true);
+      const res = await movementApi.getAll();
+      setHistory(res.data || []);
+    } catch (err) {
+      console.error('Failed to load movements ledger:', err);
+    } finally {
+      setLoading(false);
     }
+  };
 
-    // Switch to history tab to view newly logged row
+  useEffect(() => {
+    fetchMovements();
+  }, []);
+
+  const handleExecuteMove = async (newMove) => {
+    showToast(
+      `Stock transfer ${newMove.reference} (${newMove.quantity} ${newMove.unit} of ${newMove.productName}) recorded successfully!`,
+      'success'
+    );
+    await fetchMovements();
     setActiveTab('history');
   };
 
@@ -150,7 +155,12 @@ export default function MovementPage() {
         ) : (
           <MovementsHistoryTable
             history={history}
-            onRefresh={() => showToast('Stock ledger refreshed')}
+            loading={loading}
+            onRefresh={() => {
+              fetchMovements();
+              showToast('Stock ledger refreshed');
+            }}
+            onExecuteNew={() => setActiveTab('execute')}
           />
         )}
       </main>

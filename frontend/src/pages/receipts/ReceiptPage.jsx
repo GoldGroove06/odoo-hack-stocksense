@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   CheckCircle2,
   Printer,
@@ -27,7 +27,7 @@ import {
   Cpu,
   ListOrdered
 } from 'lucide-react';
-import { INITIAL_RECEIPTS_LIST, SAMPLE_SUPPLIERS, STAFF_MEMBERS, generateReference } from './receiptData';
+import { receiptApi, supplierApi, warehouseApi, productApi } from '../../services/api';
 import AddProductModal from './AddProductModal';
 import SupplierModal from './SupplierModal';
 import PrintReceiptModal from './PrintReceiptModal';
@@ -35,9 +35,33 @@ import ReceiptsListView from './ReceiptsListView';
 import Navbar from '../../components/Navbar';
 
 export default function ReceiptPage() {
-  const [receiptsList, setReceiptsList] = useState(INITIAL_RECEIPTS_LIST);
+  const [receiptsList, setReceiptsList] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [currentView, setCurrentView] = useState('list'); // 'list' (default land) | 'detail'
-  const [receipt, setReceipt] = useState(INITIAL_RECEIPTS_LIST[0]);
+  
+  const [receipt, setReceipt] = useState({
+    id: null,
+    internalNumber: 'WH/IN/001',
+    status: 'draft',
+    movementStatus: 'creation',
+    from: '',
+    to: 'Central Stock Room',
+    contact: '',
+    sellerBillNumber: '',
+    scheduledDate: new Date().toISOString().split('T')[0],
+    responsible: 'Rohit Maurya',
+    sourceDocument: '',
+    warehouseLocation: 'Central Stock Room',
+    notes: '',
+    moNumber: '',
+    supplier: null,
+    warehouse: null,
+    taxRate: 18,
+    items: []
+  });
+
+  const [suppliers, setSuppliers] = useState([]);
+  const [warehouses, setWarehouses] = useState([]);
   
   const [isAddProductOpen, setIsAddProductOpen] = useState(false);
   const [isSupplierModalOpen, setIsSupplierModalOpen] = useState(false);
@@ -51,9 +75,71 @@ export default function ReceiptPage() {
     }, 3500);
   };
 
+  // Fetch receipts and master records
+  const fetchReceipts = async () => {
+    try {
+      setLoading(true);
+      const [resReceipts, resSuppliers, resWarehouses] = await Promise.all([
+        receiptApi.getAll().catch(() => ({ data: [] })),
+        supplierApi.getAll().catch(() => ({ data: [] })),
+        warehouseApi.getAll().catch(() => ({ data: [] }))
+      ]);
+
+      const formatted = (resReceipts.data || []).map((r) => ({
+        id: r.id,
+        internalNumber: r.reference,
+        reference: r.reference,
+        status: r.status || 'draft',
+        movementStatus: r.status === 'done' ? 'received' : r.status === 'ready' ? 'arrived' : r.status === 'in_progress' ? 'moving' : 'creation',
+        from: r.receiveFrom || (r.supplier ? r.supplier.name : 'Vendor / Supplier'),
+        to: r.warehouse ? r.warehouse.name : 'Central Stock Room',
+        contact: r.supplier ? `${r.supplier.contactPerson || ''} (${r.supplier.phone || ''})` : r.responsible,
+        sellerBillNumber: r.sellerBillNumber || '',
+        scheduledDate: r.scheduledDate || '',
+        responsible: r.responsible || 'Rohit Maurya',
+        sourceDocument: r.sourceDocument || '',
+        warehouseLocation: r.warehouse ? r.warehouse.name : 'Central Stock Room',
+        notes: r.internalNotes || '',
+        moNumber: r.moNumber || '',
+        supplier: r.supplier,
+        warehouse: r.warehouse,
+        taxRate: r.taxRate || 18,
+        taxAmount: r.taxAmount || 0,
+        subtotal: r.subtotal || 0,
+        totalAmount: r.totalAmount || 0,
+        items: (r.items || []).map((item) => ({
+          id: item.id,
+          productId: item.productId,
+          productName: item.name,
+          name: item.name,
+          sku: item.sku || '',
+          qty: item.quantity,
+          quantity: item.quantity,
+          receivedQty: item.receivedQty || 0,
+          cost: item.unitCost,
+          unitCost: item.unitCost,
+          totalPrice: item.totalPrice,
+          unit: item.unit || 'Units'
+        }))
+      }));
+
+      setReceiptsList(formatted);
+      setSuppliers(resSuppliers.data || []);
+      setWarehouses(resWarehouses.data || []);
+    } catch (err) {
+      console.error('Failed to load receipts:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchReceipts();
+  }, []);
+
   // Financial calculations
   const subtotal = useMemo(() => {
-    return receipt.items.reduce((acc, item) => acc + (parseFloat(item.totalPrice) || 0), 0);
+    return (receipt.items || []).reduce((acc, item) => acc + (parseFloat(item.totalPrice) || (parseFloat(item.qty || item.quantity || 0) * parseFloat(item.cost || item.unitCost || 0))), 0);
   }, [receipt.items]);
 
   const taxAmount = useMemo(() => {
@@ -65,11 +151,11 @@ export default function ReceiptPage() {
   }, [subtotal, taxAmount]);
 
   const totalUnits = useMemo(() => {
-    return receipt.items.reduce((acc, item) => acc + (parseFloat(item.qty) || 0), 0);
+    return (receipt.items || []).reduce((acc, item) => acc + (parseFloat(item.qty || item.quantity) || 0), 0);
   }, [receipt.items]);
 
   // Stage updates
-  const handleStatusChange = (newStatus) => {
+  const handleStatusChange = async (newStatus) => {
     const updated = {
       ...receipt,
       status: newStatus,
@@ -83,8 +169,15 @@ export default function ReceiptPage() {
           : receipt.movementStatus
     };
     setReceipt(updated);
-    // Update in list
     setReceiptsList((prev) => prev.map((r) => (r.id === updated.id ? updated : r)));
+
+    if (receipt.id) {
+      try {
+        await receiptApi.update(receipt.id, { status: newStatus });
+      } catch (e) {
+        console.warn('Failed to persist status change:', e);
+      }
+    }
     showToast(`Receipt stage updated to ${newStatus.toUpperCase()}`);
   };
 
@@ -106,31 +199,118 @@ export default function ReceiptPage() {
   };
 
   // Top action handlers
-  const handleValidate = () => {
-    if (receipt.items.length === 0) {
+  const handleValidate = async () => {
+    if (!receipt.items || receipt.items.length === 0) {
       showToast('Please add at least one product before validating!', 'error');
       return;
     }
-    if (!receipt.supplier?.name) {
-      showToast('Please select a supplier before validating!', 'error');
-      return;
-    }
 
-    const updated = {
-      ...receipt,
-      status: 'done',
-      movementStatus: 'received'
-    };
-    setReceipt(updated);
-    setReceiptsList((prev) => prev.map((r) => (r.id === updated.id ? updated : r)));
-    showToast(`Receipt ${receipt.internalNumber} validated & inventory updated successfully!`, 'success');
+    try {
+      if (receipt.isNew || !receipt.id) {
+        // Save first then validate
+        const payload = {
+          status: 'done',
+          scheduledDate: receipt.scheduledDate,
+          receiveFrom: receipt.from || receipt.supplier?.name || 'Vendor',
+          responsible: receipt.responsible,
+          sellerBillNumber: receipt.sellerBillNumber,
+          internalNotes: receipt.notes,
+          subtotal,
+          taxRate: receipt.taxRate,
+          taxAmount,
+          totalAmount: grandTotal,
+          supplierId: receipt.supplier?.id || null,
+          warehouseId: receipt.warehouse?.id || null,
+          moNumber: receipt.moNumber || null,
+          items: receipt.items.map((i) => ({
+            productId: i.productId || null,
+            name: i.productName || i.name,
+            sku: i.sku || null,
+            quantity: parseFloat(i.qty || i.quantity) || 1,
+            unitCost: parseFloat(i.cost || i.unitCost) || 0,
+            totalPrice: parseFloat(i.totalPrice) || 0,
+            unit: i.unit || 'Units'
+          }))
+        };
+        const created = await receiptApi.create(payload);
+        const valRes = await receiptApi.validate(created.data.id);
+        showToast(`Receipt ${valRes.data.reference} validated & stock increased!`, 'success');
+        await fetchReceipts();
+        setCurrentView('list');
+      } else {
+        const valRes = await receiptApi.validate(receipt.id);
+        const updated = { ...receipt, status: 'done', movementStatus: 'received' };
+        setReceipt(updated);
+        showToast(`Receipt ${valRes.data.reference} validated & inventory updated successfully!`, 'success');
+        await fetchReceipts();
+      }
+    } catch (err) {
+      showToast(err.message || 'Validation failed', 'error');
+    }
+  };
+
+  const handleSaveReceipt = async () => {
+    try {
+      const payload = {
+        status: receipt.status || 'draft',
+        scheduledDate: receipt.scheduledDate,
+        receiveFrom: receipt.from || receipt.supplier?.name || 'Vendor',
+        responsible: receipt.responsible || 'Rohit Maurya',
+        sellerBillNumber: receipt.sellerBillNumber,
+        internalNotes: receipt.notes,
+        subtotal,
+        taxRate: receipt.taxRate,
+        taxAmount,
+        totalAmount: grandTotal,
+        supplierId: receipt.supplier?.id || null,
+        warehouseId: receipt.warehouse?.id || null,
+        moNumber: receipt.moNumber || null,
+        items: receipt.items.map((i) => ({
+          productId: i.productId || null,
+          name: i.productName || i.name,
+          sku: i.sku || null,
+          quantity: parseFloat(i.qty || i.quantity) || 1,
+          unitCost: parseFloat(i.cost || i.unitCost) || 0,
+          totalPrice: parseFloat(i.totalPrice) || 0,
+          unit: i.unit || 'Units'
+        }))
+      };
+
+      if (receipt.isNew || !receipt.id) {
+        const res = await receiptApi.create(payload);
+        showToast(`Receipt ${res.data.reference} saved successfully!`);
+        await fetchReceipts();
+        setCurrentView('list');
+      } else {
+        await receiptApi.update(receipt.id, payload);
+        showToast(`Receipt ${receipt.internalNumber} updated successfully!`);
+        await fetchReceipts();
+      }
+    } catch (err) {
+      showToast(err.message || 'Failed to save receipt', 'error');
+    }
+  };
+
+  const handleDeleteReceipt = async (id, ref) => {
+    if (window.confirm(`Are you sure you want to delete receipt ${ref}?`)) {
+      try {
+        await receiptApi.delete(id);
+        showToast(`Receipt ${ref} deleted successfully`);
+        await fetchReceipts();
+        if (receipt.id === id) {
+          setCurrentView('list');
+        }
+      } catch (err) {
+        showToast(err.message || 'Failed to delete receipt', 'error');
+      }
+    }
   };
 
   const handlePrint = () => {
     setIsPrintModalOpen(true);
   };
 
-  const handleCancelReceipt = () => {
+  const handleCancelReceipt = async () => {
     if (window.confirm('Are you sure you want to cancel this receipt?')) {
       const updated = {
         ...receipt,
@@ -138,80 +318,98 @@ export default function ReceiptPage() {
       };
       setReceipt(updated);
       setReceiptsList((prev) => prev.map((r) => (r.id === updated.id ? updated : r)));
+      if (receipt.id) {
+        try {
+          await receiptApi.update(receipt.id, { status: 'cancelled' });
+        } catch (e) {
+          console.warn(e);
+        }
+      }
       showToast(`Receipt ${receipt.internalNumber} marked as Cancelled`, 'info');
     }
   };
 
   // Open detail view for a selected receipt
   const handleSelectReceipt = (selected) => {
-    setReceipt(selected);
+    setReceipt({ ...selected, isNew: false });
     setCurrentView('detail');
   };
 
-  // Create new receipt with auto-increment ID format <Warehouse>/<Operation>/<ID> (e.g. WH/IN/005)
+  // Create new receipt draft
   const handleCreateNewReceipt = () => {
-    const nextId = receiptsList.length + 1;
-    const newRef = generateReference('WH', 'IN', nextId);
+    const nextNumeric = receiptsList.length + 1;
+    const nextRef = `WH/IN/${String(nextNumeric).padStart(3, '0')}`;
 
     const newRec = {
-      id: `rec-${Date.now()}`,
-      warehouseCode: 'WH',
-      operationCode: 'IN',
-      numericId: nextId,
-      internalNumber: newRef,
-      from: SAMPLE_SUPPLIERS[0].name,
-      to: 'WH/Stock/Main Bay A1',
-      contact: `${SAMPLE_SUPPLIERS[0].contactPerson} (${SAMPLE_SUPPLIERS[0].phone})`,
+      id: null,
+      isNew: true,
+      internalNumber: nextRef,
+      reference: nextRef,
+      from: suppliers[0]?.name || 'Supplier / Vendor',
+      to: warehouses[0]?.name || 'Central Stock Room',
+      contact: suppliers[0] ? `${suppliers[0].contactPerson || ''} (${suppliers[0].phone || ''})` : 'Rohit Maurya',
       sellerBillNumber: '',
-      createdOn: new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) + ' ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       scheduledDate: new Date().toISOString().split('T')[0],
-      responsible: STAFF_MEMBERS[0].name,
-      responsibleId: STAFF_MEMBERS[0].id,
+      responsible: 'Rohit Maurya',
       status: 'draft',
       movementStatus: 'creation',
       sourceDocument: '',
-      warehouseLocation: 'WH/Stock/Main Bay A1',
+      warehouseLocation: warehouses[0]?.name || 'Central Stock Room',
       notes: '',
-      manufacturingOrder: null,
-      supplier: SAMPLE_SUPPLIERS[0],
+      moNumber: '',
+      supplier: suppliers[0] || null,
+      warehouse: warehouses[0] || null,
       taxRate: 18,
       items: []
     };
 
-    setReceiptsList([newRec, ...receiptsList]);
     setReceipt(newRec);
     setCurrentView('detail');
-    showToast(`Created new receipt ${newRef}`);
+    showToast(`Draft receipt ${nextRef} initialized`);
   };
 
   // Item modifications
   const handleAddProduct = (newProduct) => {
+    const qty = parseFloat(newProduct.qty) || 1;
+    const cost = parseFloat(newProduct.cost) || 0;
+    const item = {
+      id: `temp-${Date.now()}`,
+      productId: newProduct.productId || null,
+      productName: newProduct.productName,
+      name: newProduct.productName,
+      sku: newProduct.sku || '',
+      qty,
+      quantity: qty,
+      cost,
+      unitCost: cost,
+      totalPrice: qty * cost,
+      unit: newProduct.unit || 'Units'
+    };
+
     const updated = {
       ...receipt,
-      items: [...receipt.items, newProduct]
+      items: [...(receipt.items || []), item]
     };
     setReceipt(updated);
-    setReceiptsList((prev) => prev.map((r) => (r.id === updated.id ? updated : r)));
     showToast(`Added ${newProduct.productName} to receipt`);
   };
 
   const handleRemoveProduct = (itemId) => {
     const updated = {
       ...receipt,
-      items: receipt.items.filter((item) => item.id !== itemId)
+      items: (receipt.items || []).filter((item) => item.id !== itemId)
     };
     setReceipt(updated);
-    setReceiptsList((prev) => prev.map((r) => (r.id === updated.id ? updated : r)));
     showToast('Product item removed from receipt', 'info');
   };
 
   const handleItemFieldChange = (itemId, field, value) => {
-    const updatedItems = receipt.items.map((item) => {
+    const updatedItems = (receipt.items || []).map((item) => {
       if (item.id === itemId) {
         const up = { ...item, [field]: value };
-        if (field === 'cost' || field === 'qty') {
-          const cost = field === 'cost' ? parseFloat(value) || 0 : item.cost;
-          const qty = field === 'qty' ? parseFloat(value) || 0 : item.qty;
+        if (field === 'cost' || field === 'qty' || field === 'unitCost' || field === 'quantity') {
+          const cost = parseFloat(up.cost || up.unitCost) || 0;
+          const qty = parseFloat(up.qty || up.quantity) || 0;
           up.totalPrice = cost * qty;
         }
         return up;
@@ -221,7 +419,6 @@ export default function ReceiptPage() {
 
     const updated = { ...receipt, items: updatedItems };
     setReceipt(updated);
-    setReceiptsList((prev) => prev.map((r) => (r.id === updated.id ? updated : r)));
   };
 
   // Status step configuration
@@ -306,7 +503,7 @@ export default function ReceiptPage() {
                     Receipts
                   </button>
                   <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
-                  <span className="font-semibold text-slate-900 font-mono">{receipt.internalNumber}</span>
+                  <span className="font-semibold text-slate-900 font-mono">{receipt.internalNumber || receipt.reference}</span>
                   {receipt.status === 'cancelled' && (
                     <span className="ml-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-rose-100 text-rose-700 uppercase">
                       Cancelled
@@ -356,8 +553,10 @@ export default function ReceiptPage() {
           /* DEFAULT: Land on List View */
           <ReceiptsListView
             receipts={receiptsList}
+            loading={loading}
             onSelectReceipt={handleSelectReceipt}
             onCreateNew={handleCreateNewReceipt}
+            onDeleteReceipt={handleDeleteReceipt}
             onPrintReceipt={(r) => {
               setReceipt(r);
               setIsPrintModalOpen(true);
@@ -371,7 +570,7 @@ export default function ReceiptPage() {
             <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-4 sm:p-5">
               <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
                 
-                {/* Top Bar Options (Left): Validate, Print, Cancel */}
+                {/* Top Bar Options (Left): Validate, Save, Print, Cancel, Delete */}
                 <div className="flex flex-wrap items-center gap-2.5">
                   <button
                     onClick={handleValidate}
@@ -383,7 +582,15 @@ export default function ReceiptPage() {
                     }`}
                   >
                     <CheckCircle2 className="w-4 h-4" />
-                    {receipt.status === 'done' ? 'Validated & Done' : 'Validate'}
+                    {receipt.status === 'done' ? 'Validated & Done' : 'Validate & Increase Stock'}
+                  </button>
+
+                  <button
+                    onClick={handleSaveReceipt}
+                    className="px-4 py-2 text-xs sm:text-sm font-semibold text-slate-800 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-xl shadow-xs flex items-center gap-2 transition-colors cursor-pointer active:scale-98"
+                  >
+                    <Save className="w-4 h-4 text-slate-600" />
+                    Save Draft
                   </button>
 
                   <button
@@ -402,13 +609,23 @@ export default function ReceiptPage() {
                     <XCircle className="w-4 h-4" />
                     Cancel
                   </button>
+
+                  {receipt.id && (
+                    <button
+                      onClick={() => handleDeleteReceipt(receipt.id, receipt.internalNumber || receipt.reference)}
+                      className="px-3.5 py-2 text-xs sm:text-sm font-medium text-rose-700 hover:bg-rose-100/70 border border-rose-300 rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      Delete
+                    </button>
+                  )}
                 </div>
 
                 {/* Status Pipeline (Right): Draft -> In Progress -> Ready -> Done */}
                 <div className="flex items-center overflow-x-auto pb-1 lg:pb-0">
                   <div className="inline-flex bg-slate-100/80 p-1 rounded-xl border border-slate-200 text-xs">
                     {mainStages.map((stage) => {
-                      const isActive = receipt.status === stage.key;
+                      const isActive = (receipt.status || 'draft') === stage.key;
                       const isDone =
                         receipt.status === 'done' ||
                         (receipt.status === 'ready' && stage.key === 'draft') ||
@@ -448,27 +665,25 @@ export default function ReceiptPage() {
               {/* Intermediate Status Tracking Pipeline */}
               <div className="mt-4 pt-4 border-t border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
-                  <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                    Intermediate Tracking Status:
+                  <span className="text-xs font-semibold uppercase tracking-wider text-slate-400 font-mono">
+                    Movement Lifecycle:
                   </span>
                 </div>
-
-                <div className="flex flex-wrap items-center gap-1.5">
+                <div className="flex flex-wrap gap-2">
                   {movementOptions.map((opt) => {
                     const isSelected = receipt.movementStatus === opt.key;
-                    const IconComponent = opt.icon;
+                    const IconComp = opt.icon;
                     return (
                       <button
                         key={opt.key}
-                        type="button"
                         onClick={() => handleMovementStatusChange(opt.key)}
-                        className={`px-2.5 py-1 text-xs rounded-lg border transition-all flex items-center gap-1.5 cursor-pointer ${
+                        className={`px-2.5 py-1 rounded-lg text-xs font-medium border flex items-center gap-1.5 transition-all cursor-pointer ${
                           isSelected
-                            ? `${opt.color} font-semibold ring-1 ring-slate-400/40 shadow-xs`
-                            : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-slate-700'
+                            ? `${opt.color} shadow-xs font-bold ring-2 ring-indigo-500/20`
+                            : 'bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100'
                         }`}
                       >
-                        <IconComponent className="w-3.5 h-3.5" />
+                        <IconComp className="w-3.5 h-3.5" />
                         <span>{opt.label}</span>
                       </button>
                     );
@@ -477,333 +692,229 @@ export default function ReceiptPage() {
               </div>
             </div>
 
-            {/* Main Receipt Sheet Card */}
+            {/* Document Details & Product Lines */}
             <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
-              
-              {/* Document Header Info Section */}
-              <div className="p-6 sm:p-8 border-b border-slate-100">
-                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-slate-100">
+              <div className="p-6 space-y-6">
+                
+                {/* Header Reference & Bill info */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-6 border-b border-slate-100 gap-4">
                   <div>
-                    <span className="text-xs font-semibold uppercase tracking-wider text-indigo-600 font-mono">
-                      Inventory Receipt / GRN Reference
+                    <span className="text-xs font-semibold uppercase tracking-wider text-slate-400 font-mono">
+                      Warehouse Inward Reference
                     </span>
-                    <div className="flex items-center gap-3 mt-1">
-                      <input
-                        type="text"
-                        value={receipt.internalNumber}
-                        onChange={(e) => setReceipt({ ...receipt, internalNumber: e.target.value })}
-                        className="text-2xl sm:text-3xl font-bold font-mono text-slate-900 tracking-tight bg-transparent border-b border-dashed border-slate-300 hover:border-slate-400 focus:border-indigo-600 focus:outline-none px-1"
-                        title="Format: <Warehouse>/<Operation>/<ID>"
-                      />
-                      <span
-                        className={`px-2.5 py-1 rounded-full text-xs font-semibold capitalize ${
-                          receipt.status === 'done'
-                            ? 'bg-emerald-100 text-emerald-800'
-                            : receipt.status === 'ready'
-                            ? 'bg-purple-100 text-purple-800'
-                            : receipt.status === 'in_progress'
-                            ? 'bg-blue-100 text-blue-800'
-                            : 'bg-slate-100 text-slate-700'
-                        }`}
-                      >
-                        {receipt.status.replace('_', ' ')}
-                      </span>
-                    </div>
+                    <h2 className="text-2xl sm:text-3xl font-bold font-mono text-slate-900 mt-1">
+                      {receipt.internalNumber || receipt.reference}
+                    </h2>
                   </div>
-
-                  {/* Quick Info Stamps */}
-                  <div className="flex items-center gap-3 text-xs text-slate-500 bg-slate-50 p-3 rounded-xl border border-slate-200">
-                    <div className="flex items-center gap-1.5">
-                      <Clock className="w-3.5 h-3.5 text-slate-400" />
-                      <span>Created: <strong className="text-slate-700">{receipt.createdOn}</strong></span>
+                  <div className="flex items-center gap-3">
+                    <div className="text-right">
+                      <span className="text-xs text-slate-400 block font-medium">Scheduled Receive Date</span>
+                      <span className="text-sm font-semibold text-slate-800 font-mono">
+                        {receipt.scheduledDate || 'Today'}
+                      </span>
                     </div>
                   </div>
                 </div>
 
-                {/* Form Fields Grid: Receive from, Schedule date, Responsible, Internal receipt number, Created on, Seller bill number */}
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 pt-6">
+                {/* Form Fields Grid */}
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   
-                  {/* Receive From (Supplier) */}
+                  {/* Receive From (Supplier Selection) */}
                   <div className="space-y-1.5">
-                    <div className="flex items-center justify-between">
-                      <label className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
-                        <Building2 className="w-3.5 h-3.5 text-slate-400" />
-                        Receive From (Supplier) *
-                      </label>
+                    <label className="block text-xs font-semibold text-slate-700">
+                      Receive From (Supplier / Source) <span className="text-rose-500">*</span>
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={receipt.from || receipt.supplier?.name || ''}
+                        onChange={(e) => setReceipt({ ...receipt, from: e.target.value })}
+                        placeholder="Select or enter supplier name..."
+                        className="w-full px-3.5 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:bg-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all font-medium text-slate-800"
+                      />
                       <button
                         type="button"
                         onClick={() => setIsSupplierModalOpen(true)}
-                        className="text-xs text-indigo-600 hover:text-indigo-700 font-medium hover:underline flex items-center gap-1 cursor-pointer"
+                        className="px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-xl text-xs font-semibold transition-colors flex items-center gap-1.5 cursor-pointer"
+                        title="Pick from registered supplier directory"
                       >
-                        Change / Edit
+                        <Building2 className="w-4 h-4" />
+                        Pick
                       </button>
                     </div>
-                    
-                    <div
-                      onClick={() => setIsSupplierModalOpen(true)}
-                      className="p-3 bg-slate-50 hover:bg-slate-100/80 border border-slate-200 rounded-xl cursor-pointer transition-colors group"
+                  </div>
+
+                  {/* Destination Location */}
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-semibold text-slate-700">
+                      Destination (To Warehouse Location) <span className="text-rose-500">*</span>
+                    </label>
+                    <select
+                      value={receipt.warehouse?.id || ''}
+                      onChange={(e) => {
+                        const wh = warehouses.find((w) => w.id === parseInt(e.target.value));
+                        setReceipt({
+                          ...receipt,
+                          warehouse: wh || null,
+                          to: wh ? wh.name : 'Central Stock Room'
+                        });
+                      }}
+                      className="w-full px-3.5 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:bg-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all font-medium text-slate-800"
                     >
-                      <p className="text-sm font-semibold text-slate-900 group-hover:text-indigo-600 transition-colors">
-                        {receipt.supplier?.name || 'Click to select supplier'}
-                      </p>
-                      <p className="text-xs text-slate-500 line-clamp-1 mt-0.5">
-                        {receipt.supplier?.address || 'No address set'}
-                      </p>
-                      <div className="mt-2 flex items-center gap-2 text-[11px] text-slate-500 font-mono">
-                        <span className="bg-white px-1.5 py-0.5 rounded border border-slate-200">
-                          GST: {receipt.supplier?.gstNumber || 'N/A'}
-                        </span>
-                        <span>Ph: {receipt.supplier?.phone || 'N/A'}</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Scheduled Date & Responsible Person */}
-                  <div className="space-y-4">
-                    {/* Scheduled Date */}
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                        Scheduled Date
-                      </label>
-                      <div className="relative">
-                        <Calendar className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                        <input
-                          type="date"
-                          value={receipt.scheduledDate}
-                          onChange={(e) => setReceipt({ ...receipt, scheduledDate: e.target.value })}
-                          className="w-full pl-9 pr-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:bg-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all font-medium text-slate-800"
-                        />
-                      </div>
-                    </div>
-
-                    {/* Responsible Staff */}
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                        Responsible Person
-                      </label>
-                      <div className="relative">
-                        <User className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                        <select
-                          value={receipt.responsible}
-                          onChange={(e) => setReceipt({ ...receipt, responsible: e.target.value })}
-                          className="w-full pl-9 pr-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:bg-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all text-slate-800"
-                        >
-                          {STAFF_MEMBERS.map((staff) => (
-                            <option key={staff.id} value={staff.name}>
-                              {staff.name} ({staff.role})
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Seller Bill Number & Destination Warehouse */}
-                  <div className="space-y-4">
-                    {/* Seller Bill Number */}
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                        Seller Bill Number / Invoice Ref
-                      </label>
-                      <div className="relative">
-                        <FileText className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                        <input
-                          type="text"
-                          placeholder="e.g. INV-2026-8891"
-                          value={receipt.sellerBillNumber}
-                          onChange={(e) => setReceipt({ ...receipt, sellerBillNumber: e.target.value })}
-                          className="w-full pl-9 pr-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:bg-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all font-mono text-slate-800"
-                        />
-                      </div>
-                    </div>
-
-                    {/* Destination Warehouse Location (To) */}
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                        To (Location of Warehouse)
-                      </label>
-                      <input
-                        type="text"
-                        value={receipt.warehouseLocation}
-                        onChange={(e) => setReceipt({ ...receipt, warehouseLocation: e.target.value, to: e.target.value })}
-                        className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:bg-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all text-slate-800 font-mono text-xs"
-                      />
-                    </div>
-                  </div>
-
-                </div>
-
-                {/* Linked Manufacturing Order & Work Orders Section */}
-                {receipt.manufacturingOrder && (
-                  <div className="mt-6 p-4 rounded-xl bg-purple-50/50 border border-purple-200/80 space-y-3">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                      <div className="flex items-center gap-2">
-                        <span className="w-6 h-6 rounded-lg bg-purple-600 text-white flex items-center justify-center font-bold text-xs">
-                          <Cpu className="w-3.5 h-3.5" />
-                        </span>
-                        <div>
-                          <h4 className="text-xs font-bold uppercase tracking-wider text-purple-900">
-                            Linked Manufacturing Order: {receipt.manufacturingOrder.moNumber}
-                          </h4>
-                          <p className="text-xs text-purple-700">
-                            Product: <strong className="text-purple-900">{receipt.manufacturingOrder.productName}</strong> (Target Qty: {receipt.manufacturingOrder.targetQty} Units)
-                          </p>
-                        </div>
-                      </div>
-                      <span className="text-xs font-semibold text-purple-700 bg-purple-100 px-2.5 py-1 rounded-full">
-                        {receipt.manufacturingOrder.workOrders.length} Work Orders Linked
-                      </span>
-                    </div>
-
-                    {/* Work Orders List */}
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
-                      {receipt.manufacturingOrder.workOrders.map((wo) => (
-                        <div key={wo.id} className="p-3 bg-white rounded-xl border border-purple-100 shadow-2xs space-y-1.5 text-xs">
-                          <div className="flex items-center justify-between font-medium text-slate-800">
-                            <span className="font-mono font-bold text-purple-800">{wo.id}</span>
-                            <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
-                              wo.status === 'Done'
-                                ? 'bg-emerald-100 text-emerald-800'
-                                : wo.status === 'In Progress'
-                                ? 'bg-blue-100 text-blue-800'
-                                : 'bg-slate-100 text-slate-600'
-                            }`}>
-                              {wo.status}
-                            </span>
-                          </div>
-                          <p className="font-medium text-slate-900">{wo.name}</p>
-                          <div className="text-[11px] text-slate-500 flex justify-between items-center pt-1 border-t border-slate-100">
-                            <span>{wo.workstation}</span>
-                            <span className="font-mono font-bold text-purple-700">{wo.progress}%</span>
-                          </div>
-                        </div>
+                      {warehouses.map((w) => (
+                        <option key={w.id} value={w.id}>
+                          {w.name} ({w.shortcode || 'WH'})
+                        </option>
                       ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Product / Goods Details Section */}
-              <div className="p-6 sm:p-8">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
-                  <div>
-                    <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                      <Package className="w-4 h-4 text-indigo-600" />
-                      Product & Goods Details
-                    </h3>
-                    <p className="text-xs text-slate-500">
-                      Manage received goods, verify unit costs, units of measure, and quantities.
-                    </p>
+                      {warehouses.length === 0 && (
+                        <option value="">Central Stock Room (Default)</option>
+                      )}
+                    </select>
                   </div>
 
-                  {/* ADD NEW PRODUCT BUTTON */}
-                  <button
-                    type="button"
-                    onClick={() => setIsAddProductOpen(true)}
-                    className="px-4 py-2 text-xs sm:text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 active:scale-98 rounded-xl shadow-xs flex items-center gap-2 transition-all cursor-pointer self-start sm:self-auto"
-                  >
-                    <Plus className="w-4 h-4" />
-                    Add New Product
-                  </button>
+                  {/* Scheduled Date */}
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-semibold text-slate-700">
+                      Scheduled Date
+                    </label>
+                    <input
+                      type="date"
+                      value={receipt.scheduledDate || ''}
+                      onChange={(e) => setReceipt({ ...receipt, scheduledDate: e.target.value })}
+                      className="w-full px-3.5 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:bg-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all font-medium text-slate-800"
+                    />
+                  </div>
+
+                  {/* Responsible Staff */}
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-semibold text-slate-700">
+                      Responsible Person
+                    </label>
+                    <input
+                      type="text"
+                      value={receipt.responsible || 'Rohit Maurya'}
+                      onChange={(e) => setReceipt({ ...receipt, responsible: e.target.value })}
+                      className="w-full px-3.5 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:bg-white font-medium text-slate-800"
+                    />
+                  </div>
+
+                  {/* Seller Bill / Invoice No. */}
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-semibold text-slate-700">
+                      Seller Bill / Invoice Ref
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. INV-2026-9812"
+                      value={receipt.sellerBillNumber || ''}
+                      onChange={(e) => setReceipt({ ...receipt, sellerBillNumber: e.target.value })}
+                      className="w-full px-3.5 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:bg-white font-mono text-slate-800"
+                    />
+                  </div>
+
+                  {/* Work Order / MO Reference */}
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-semibold text-slate-700">
+                      Linked MO Number
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. MO-2026-001"
+                      value={receipt.moNumber || ''}
+                      onChange={(e) => setReceipt({ ...receipt, moNumber: e.target.value })}
+                      className="w-full px-3.5 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:bg-white font-mono text-slate-800"
+                    />
+                  </div>
+
                 </div>
 
-                {/* Goods Details Table */}
-                <div className="border border-slate-200 rounded-xl overflow-hidden shadow-2xs">
-                  <div className="overflow-x-auto">
+                {/* Product Items Table */}
+                <div className="pt-6 border-t border-slate-100">
+                  <div className="flex items-center justify-between mb-3">
+                    <div>
+                      <h3 className="text-base font-bold text-slate-900">Received Products & Components</h3>
+                      <p className="text-xs text-slate-500">Products checked against vendor delivery challan</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setIsAddProductOpen(true)}
+                      className="px-3 py-1.5 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      Add Product Line
+                    </button>
+                  </div>
+
+                  <div className="overflow-x-auto rounded-xl border border-slate-200">
                     <table className="w-full text-left text-xs sm:text-sm border-collapse">
                       <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200">
                         <tr>
-                          <th className="py-3 px-3.5 w-10 text-center text-slate-400">#</th>
-                          <th className="py-3 px-3.5 min-w-[220px]">Product</th>
-                          <th className="py-3 px-3.5 w-32 text-right">Cost (₹)</th>
-                          <th className="py-3 px-3.5 w-28 text-center">Unit</th>
-                          <th className="py-3 px-3.5 w-28 text-right">Qty</th>
-                          <th className="py-3 px-3.5 w-36 text-right font-semibold">Total Price</th>
-                          <th className="py-3 px-2 w-12 text-center"></th>
+                          <th className="py-2.5 px-3">Product Name</th>
+                          <th className="py-2.5 px-3 w-32">SKU</th>
+                          <th className="py-2.5 px-3 w-28 text-right">Quantity</th>
+                          <th className="py-2.5 px-3 w-24">Unit</th>
+                          <th className="py-2.5 px-3 w-32 text-right">Unit Cost (₹)</th>
+                          <th className="py-2.5 px-3 w-32 text-right">Total Price (₹)</th>
+                          <th className="py-2.5 px-2 w-10"></th>
                         </tr>
                       </thead>
 
                       <tbody className="divide-y divide-slate-100 bg-white">
-                        {receipt.items.length === 0 ? (
+                        {(!receipt.items || receipt.items.length === 0) ? (
                           <tr>
-                            <td colSpan="7" className="py-12 text-center text-slate-400">
-                              <Package className="w-10 h-10 mx-auto text-slate-300 mb-2" />
-                              <p className="font-medium text-slate-600">No goods added yet</p>
-                              <p className="text-xs text-slate-400 mt-1">
-                                Click <strong className="text-indigo-600">Add New Product</strong> above to add receipt lines.
-                              </p>
+                            <td colSpan="7" className="py-8 text-center text-slate-400">
+                              <Package className="w-8 h-8 mx-auto text-slate-300 mb-1" />
+                              <p className="font-medium text-slate-600 text-xs">No products in this receipt</p>
+                              <button
+                                type="button"
+                                onClick={() => setIsAddProductOpen(true)}
+                                className="text-xs font-semibold text-indigo-600 hover:underline mt-1 inline-block cursor-pointer"
+                              >
+                                + Add First Item
+                              </button>
                             </td>
                           </tr>
                         ) : (
-                          receipt.items.map((item, index) => (
-                            <tr key={item.id} className="hover:bg-slate-50/70 transition-colors group">
-                              <td className="py-3 px-3.5 text-center text-slate-400 font-mono text-xs">
-                                {index + 1}
+                          receipt.items.map((item) => (
+                            <tr key={item.id} className="hover:bg-slate-50/60 transition-colors">
+                              <td className="py-2.5 px-3 font-medium text-slate-800">
+                                {item.productName || item.name}
                               </td>
-
-                              <td className="py-3 px-3.5">
-                                <input
-                                  type="text"
-                                  value={item.productName}
-                                  onChange={(e) => handleItemFieldChange(item.id, 'productName', e.target.value)}
-                                  className="font-medium text-slate-900 w-full bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-slate-200 focus:border-indigo-500 rounded px-1.5 py-0.5 focus:outline-none transition-colors"
-                                />
-                                <div className="text-[11px] text-slate-400 font-mono px-1.5">
-                                  SKU: {item.sku}
-                                </div>
+                              <td className="py-2.5 px-3 font-mono text-xs text-slate-500">
+                                {item.sku || '—'}
                               </td>
-
-                              <td className="py-3 px-3.5 text-right">
-                                <input
-                                  type="number"
-                                  min="0"
-                                  step="0.01"
-                                  value={item.cost}
-                                  onChange={(e) => handleItemFieldChange(item.id, 'cost', e.target.value)}
-                                  className="w-full text-right font-mono font-medium text-slate-800 bg-slate-50 group-hover:bg-white border border-slate-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                                />
-                              </td>
-
-                              <td className="py-3 px-3.5 text-center">
-                                <select
-                                  value={item.unit}
-                                  onChange={(e) => handleItemFieldChange(item.id, 'unit', e.target.value)}
-                                  className="w-full text-center text-xs bg-slate-50 group-hover:bg-white border border-slate-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-500 text-slate-700"
-                                >
-                                  <option value="Units">Units</option>
-                                  <option value="Pcs">Pcs</option>
-                                  <option value="Kg">Kg</option>
-                                  <option value="Box">Box</option>
-                                  <option value="Cartridge">Cartridge</option>
-                                  <option value="Drum">Drum</option>
-                                  <option value="Liters">Liters</option>
-                                  <option value="Meters">Meters</option>
-                                </select>
-                              </td>
-
-                              <td className="py-3 px-3.5 text-right">
+                              <td className="py-2.5 px-3 text-right">
                                 <input
                                   type="number"
                                   min="1"
-                                  step="1"
-                                  value={item.qty}
+                                  value={item.qty || item.quantity || 1}
                                   onChange={(e) => handleItemFieldChange(item.id, 'qty', e.target.value)}
-                                  className="w-full text-right font-bold text-slate-900 bg-slate-50 group-hover:bg-white border border-slate-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                                  className="w-20 px-2 py-1 text-right text-xs bg-slate-50 border border-slate-200 rounded font-semibold text-slate-800"
                                 />
                               </td>
-
-                              <td className="py-3 px-3.5 text-right font-semibold font-mono text-slate-900">
-                                ₹{(parseFloat(item.totalPrice) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              <td className="py-2.5 px-3 text-slate-600 text-xs">
+                                {item.unit || 'Units'}
                               </td>
-
-                              <td className="py-3 px-2 text-center">
+                              <td className="py-2.5 px-3 text-right font-mono text-slate-700">
+                                <input
+                                  type="number"
+                                  min="0"
+                                  value={item.cost || item.unitCost || 0}
+                                  onChange={(e) => handleItemFieldChange(item.id, 'cost', e.target.value)}
+                                  className="w-24 px-2 py-1 text-right text-xs bg-slate-50 border border-slate-200 rounded font-mono text-slate-800"
+                                />
+                              </td>
+                              <td className="py-2.5 px-3 text-right font-mono font-bold text-slate-900">
+                                ₹{(item.totalPrice || (parseFloat(item.qty || item.quantity || 1) * parseFloat(item.cost || item.unitCost || 0))).toLocaleString()}
+                              </td>
+                              <td className="py-2.5 px-2 text-center">
                                 <button
                                   type="button"
                                   onClick={() => handleRemoveProduct(item.id)}
-                                  className="p-1 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
-                                  title="Delete row"
+                                  className="p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                                  title="Remove item"
                                 >
-                                  <Trash2 className="w-4 h-4" />
+                                  <Trash2 className="w-3.5 h-3.5" />
                                 </button>
                               </td>
                             </tr>
@@ -814,37 +925,21 @@ export default function ReceiptPage() {
                   </div>
                 </div>
 
-                {/* Bottom Row: Notes + Financial Summary Card */}
+                {/* Bottom Row: Notes & Summary */}
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 mt-6 items-start">
-                  
-                  {/* Left Column: Notes & Remarks */}
-                  <div className="lg:col-span-7 space-y-4">
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                        Warehouse Receipt Notes & Special Instructions
-                      </label>
-                      <textarea
-                        rows="3"
-                        value={receipt.notes}
-                        onChange={(e) => setReceipt({ ...receipt, notes: e.target.value })}
-                        placeholder="Enter any package damages, verification remarks, seal numbers, or delivery notes..."
-                        className="w-full p-3 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:bg-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all text-slate-700"
-                      />
-                    </div>
-
-                    <div className="flex items-center gap-3 text-xs text-slate-500">
-                      <div className="flex items-center gap-1">
-                        <Layers className="w-3.5 h-3.5 text-slate-400" />
-                        <span>Total Unique Lines: <strong className="text-slate-800">{receipt.items.length}</strong></span>
-                      </div>
-                      <span>•</span>
-                      <div>
-                        <span>Total Quantity: <strong className="text-slate-800">{totalUnits} units</strong></span>
-                      </div>
-                    </div>
+                  <div className="lg:col-span-7 space-y-3">
+                    <label className="block text-xs font-semibold text-slate-700">
+                      Receipt Remarks & Inspection Notes
+                    </label>
+                    <textarea
+                      rows="3"
+                      value={receipt.notes || ''}
+                      onChange={(e) => setReceipt({ ...receipt, notes: e.target.value })}
+                      placeholder="Enter verification remarks, seal numbers, batch codes..."
+                      className="w-full p-3 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:bg-white"
+                    />
                   </div>
 
-                  {/* Right Column: Financial Summary Card */}
                   <div className="lg:col-span-5 bg-slate-50 rounded-2xl border border-slate-200 p-5 space-y-3">
                     <h4 className="text-xs font-bold uppercase tracking-wider text-slate-600">
                       Financial Summary
@@ -852,44 +947,27 @@ export default function ReceiptPage() {
 
                     <div className="space-y-2 text-xs sm:text-sm">
                       <div className="flex justify-between text-slate-600">
-                        <span>Untaxed Amount (Subtotal):</span>
+                        <span>Subtotal:</span>
                         <span className="font-semibold text-slate-800 font-mono">
                           ₹{subtotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </span>
                       </div>
 
                       <div className="flex items-center justify-between text-slate-600">
-                        <div className="flex items-center gap-1.5">
-                          <span>GST Rate:</span>
-                          <select
-                            value={receipt.taxRate}
-                            onChange={(e) => setReceipt({ ...receipt, taxRate: parseFloat(e.target.value) || 0 })}
-                            className="text-xs bg-white border border-slate-200 rounded px-1.5 py-0.5 focus:outline-none font-medium"
-                          >
-                            <option value="0">0%</option>
-                            <option value="5">5%</option>
-                            <option value="12">12%</option>
-                            <option value="18">18% (Standard)</option>
-                            <option value="28">28%</option>
-                          </select>
-                        </div>
+                        <span>GST (18%):</span>
                         <span className="font-semibold text-slate-800 font-mono">
                           ₹{taxAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </span>
                       </div>
 
                       <div className="pt-3 border-t border-slate-200 flex justify-between items-baseline">
-                        <div>
-                          <span className="text-sm font-bold text-slate-900 block">Total Price:</span>
-                          <span className="text-[11px] text-slate-500">Including all applicable taxes</span>
-                        </div>
-                        <span className="text-lg sm:text-xl font-bold font-mono text-indigo-700">
+                        <span className="text-sm font-bold text-slate-900">Total Valuation:</span>
+                        <span className="text-lg font-bold font-mono text-indigo-700">
                           ₹{grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </span>
                       </div>
                     </div>
                   </div>
-
                 </div>
 
               </div>
@@ -910,14 +988,12 @@ export default function ReceiptPage() {
         onClose={() => setIsSupplierModalOpen(false)}
         currentSupplier={receipt.supplier}
         onSelectSupplier={(selectedSup) => {
-          const updated = {
+          setReceipt({
             ...receipt,
             supplier: selectedSup,
             from: selectedSup.name,
-            contact: `${selectedSup.contactPerson} (${selectedSup.phone})`
-          };
-          setReceipt(updated);
-          setReceiptsList((prev) => prev.map((r) => (r.id === updated.id ? updated : r)));
+            contact: `${selectedSup.contactPerson || ''} (${selectedSup.phone || ''})`
+          });
           showToast(`Supplier set to ${selectedSup.name}`);
         }}
       />

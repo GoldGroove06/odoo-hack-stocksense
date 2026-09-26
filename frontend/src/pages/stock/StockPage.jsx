@@ -61,7 +61,7 @@ export default function StockPage() {
       // 1. Fetch Products
       try {
         const prodRes = await productApi.getAll();
-        if (prodRes && prodRes.data && prodRes.data.length > 0) {
+        if (prodRes && Array.isArray(prodRes.data)) {
           const mapped = prodRes.data.map((p) => ({
             id: p.id,
             name: p.name,
@@ -72,31 +72,31 @@ export default function StockPage() {
             onHand: Number(p.onHand) || 0,
             reserved: Number(p.reserved) || 0,
             freeToUse: Number(p.freeToUse ?? p.onHand) || 0,
-            location: p.location?.name || p.location || 'Central Stock Room',
+            location: p.location?.name || p.location || 'Unassigned',
             minStockAlert: Number(p.minStockAlert) || 10
           }));
           setStocks(mapped);
         } else {
-          setStocks(INITIAL_STOCKS);
+          setStocks([]);
         }
       } catch (err) {
-        console.warn('Backend API offline, using initial stock list:', err.message);
-        setStocks(INITIAL_STOCKS);
+        console.warn('Backend API error for stocks:', err.message);
+        setStocks([]);
       }
 
       // 2. Fetch Locations
       try {
         const locRes = await locationApi.getAll();
-        if (locRes && locRes.data && locRes.data.length > 0) {
+        if (locRes && Array.isArray(locRes.data)) {
           setLocations(locRes.data);
           if (!newProduct.location && locRes.data.length > 0) {
             setNewProduct((prev) => ({ ...prev, location: locRes.data[0].name }));
           }
         } else {
-          setLocations(INITIAL_LOCATIONS);
+          setLocations([]);
         }
       } catch (err) {
-        setLocations(INITIAL_LOCATIONS);
+        setLocations([]);
       }
     } finally {
       setLoading(false);
@@ -391,10 +391,22 @@ export default function StockPage() {
               <tbody className="divide-y divide-slate-100 bg-white">
                 {filteredStocks.length === 0 ? (
                   <tr>
-                    <td colSpan="7" className="py-12 text-center text-slate-400">
-                      <Package className="w-10 h-10 mx-auto text-slate-300 mb-2" />
-                      <p className="font-medium text-slate-600">No stock products found</p>
-                      <p className="text-xs text-slate-400 mt-1">Try resetting search filters.</p>
+                    <td colSpan="7" className="py-14 text-center text-slate-400">
+                      <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center mx-auto mb-3">
+                        <Boxes className="w-6 h-6" />
+                      </div>
+                      <p className="font-semibold text-slate-700 text-sm">No stock items in inventory</p>
+                      <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
+                        No product stocks recorded in the database yet. Click below to add an inventory product.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setIsAddModalOpen(true)}
+                        className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-xs transition-colors cursor-pointer"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        Add Stock Product
+                      </button>
                     </td>
                   </tr>
                 ) : (

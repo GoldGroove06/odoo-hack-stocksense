@@ -66,56 +66,50 @@ export default function Product() {
       // 1. Fetch Products
       try {
         const prodRes = await productApi.getAll();
-        if (prodRes && prodRes.data) {
+        if (prodRes && Array.isArray(prodRes.data)) {
           setProducts(prodRes.data);
+        } else {
+          setProducts([]);
         }
       } catch (err) {
-        console.warn('Backend not available, using fallback stock data:', err.message);
-        setProducts(INITIAL_STOCKS);
+        console.warn('Backend API error for products:', err.message);
+        setProducts([]);
       }
 
       // 2. Fetch Categories
       try {
         const catRes = await categoryApi.getAll();
-        if (catRes && catRes.data) {
+        if (catRes && Array.isArray(catRes.data)) {
           setCategories(catRes.data);
+        } else {
+          setCategories([]);
         }
       } catch (err) {
-        setCategories([
-          { id: 1, name: 'Electronics' },
-          { id: 2, name: 'Hardware' },
-          { id: 3, name: 'Consumables' },
-          { id: 4, name: 'Packaging' },
-          { id: 5, name: 'Cabling' },
-          { id: 6, name: 'Energy' }
-        ]);
+        setCategories([]);
       }
 
       // 3. Fetch UOMs
       try {
         const uomRes = await uomApi.getAll();
-        if (uomRes && uomRes.data) {
+        if (uomRes && Array.isArray(uomRes.data)) {
           setUoms(uomRes.data);
+        } else {
+          setUoms([]);
         }
       } catch (err) {
-        setUoms([
-          { id: 1, name: 'Units', symbol: 'unit' },
-          { id: 2, name: 'Pieces', symbol: 'pcs' },
-          { id: 3, name: 'Kilograms', symbol: 'kg' },
-          { id: 4, name: 'Boxes', symbol: 'box' },
-          { id: 5, name: 'Cartridges', symbol: 'crt' },
-          { id: 6, name: 'Drums', symbol: 'drm' }
-        ]);
+        setUoms([]);
       }
 
       // 4. Fetch Locations
       try {
         const locRes = await locationApi.getAll();
-        if (locRes && locRes.data) {
+        if (locRes && Array.isArray(locRes.data)) {
           setLocations(locRes.data);
+        } else {
+          setLocations([]);
         }
       } catch (err) {
-        setLocations(INITIAL_LOCATIONS);
+        setLocations([]);
       }
     } finally {
       setLoading(false);
@@ -463,10 +457,22 @@ export default function Product() {
               <tbody className="divide-y divide-slate-100 bg-white">
                 {filteredProducts.length === 0 ? (
                   <tr>
-                    <td colSpan="9" className="py-12 text-center text-slate-400">
-                      <Package className="w-10 h-10 mx-auto text-slate-300 mb-2" />
-                      <p className="font-medium text-slate-600">No products found</p>
-                      <p className="text-xs text-slate-400 mt-1">Try adjusting your search criteria or click "Add Product".</p>
+                    <td colSpan="9" className="py-14 text-center text-slate-400">
+                      <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center mx-auto mb-3">
+                        <Package className="w-6 h-6" />
+                      </div>
+                      <p className="font-semibold text-slate-700 text-sm">No products in database</p>
+                      <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
+                        There are currently no products registered. Click the button below to create your first product.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={handleOpenAdd}
+                        className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-xs transition-colors cursor-pointer"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        Create New Product
+                      </button>
                     </td>
                   </tr>
                 ) : (

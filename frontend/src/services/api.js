@@ -1,4 +1,4 @@
-// API Client Service for Backend Integration
+// API Client Service for StockSense ERP Integration
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api/v1';
 
@@ -30,18 +30,13 @@ async function request(endpoint, options = {}) {
 // Product API Endpoints
 // -----------------------------------------------------------------------------
 export const productApi = {
-  // GET /products
   getAll: (params = {}) => {
     const query = new URLSearchParams(params).toString();
     return request(`/products${query ? `?${query}` : ''}`);
   },
-  // GET /products/:id
   getById: (id) => request(`/products/${id}`),
-  // POST /products
   create: (data) => request('/products', { method: 'POST', body: JSON.stringify(data) }),
-  // PATCH /products/:id
   update: (id, data) => request(`/products/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
-  // DELETE /products/:id
   delete: (id) => request(`/products/${id}`, { method: 'DELETE' })
 };
 
@@ -49,18 +44,13 @@ export const productApi = {
 // Category API Endpoints
 // -----------------------------------------------------------------------------
 export const categoryApi = {
-  // GET /categories
   getAll: (params = {}) => {
     const query = new URLSearchParams(params).toString();
     return request(`/categories${query ? `?${query}` : ''}`);
   },
-  // GET /categories/:id
   getById: (id) => request(`/categories/${id}`),
-  // POST /categories
   create: (data) => request('/categories', { method: 'POST', body: JSON.stringify(data) }),
-  // PATCH /categories/:id
   update: (id, data) => request(`/categories/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
-  // DELETE /categories/:id
   delete: (id) => request(`/categories/${id}`, { method: 'DELETE' })
 };
 
@@ -68,18 +58,13 @@ export const categoryApi = {
 // Unit of Measure (UOM) API Endpoints
 // -----------------------------------------------------------------------------
 export const uomApi = {
-  // GET /uoms
   getAll: (params = {}) => {
     const query = new URLSearchParams(params).toString();
     return request(`/uoms${query ? `?${query}` : ''}`);
   },
-  // GET /uoms/:id
   getById: (id) => request(`/uoms/${id}`),
-  // POST /uoms
   create: (data) => request('/uoms', { method: 'POST', body: JSON.stringify(data) }),
-  // PATCH /uoms/:id
   update: (id, data) => request(`/uoms/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
-  // DELETE /uoms/:id
   delete: (id) => request(`/uoms/${id}`, { method: 'DELETE' })
 };
 
@@ -87,18 +72,13 @@ export const uomApi = {
 // Warehouse API Endpoints
 // -----------------------------------------------------------------------------
 export const warehouseApi = {
-  // GET /warehouses
   getAll: (params = {}) => {
     const query = new URLSearchParams(params).toString();
     return request(`/warehouses${query ? `?${query}` : ''}`);
   },
-  // GET /warehouses/:id
   getById: (id) => request(`/warehouses/${id}`),
-  // POST /warehouses
   create: (data) => request('/warehouses', { method: 'POST', body: JSON.stringify(data) }),
-  // PATCH /warehouses/:id
   update: (id, data) => request(`/warehouses/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
-  // DELETE /warehouses/:id
   delete: (id) => request(`/warehouses/${id}`, { method: 'DELETE' })
 };
 
@@ -106,19 +86,109 @@ export const warehouseApi = {
 // Location API Endpoints
 // -----------------------------------------------------------------------------
 export const locationApi = {
-  // GET /locations
   getAll: (params = {}) => {
     const query = new URLSearchParams(params).toString();
     return request(`/locations${query ? `?${query}` : ''}`);
   },
-  // GET /locations/:id
   getById: (id) => request(`/locations/${id}`),
-  // POST /locations
   create: (data) => request('/locations', { method: 'POST', body: JSON.stringify(data) }),
-  // PATCH /locations/:id
   update: (id, data) => request(`/locations/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
-  // DELETE /locations/:id
   delete: (id) => request(`/locations/${id}`, { method: 'DELETE' })
+};
+
+// -----------------------------------------------------------------------------
+// Supplier & Customer API Endpoints
+// -----------------------------------------------------------------------------
+export const supplierApi = {
+  getAll: () => request('/suppliers'),
+  create: (data) => request('/suppliers', { method: 'POST', body: JSON.stringify(data) }),
+  delete: (id) => request(`/suppliers/${id}`, { method: 'DELETE' })
+};
+
+export const customerApi = {
+  getAll: () => request('/customers'),
+  create: (data) => request('/customers', { method: 'POST', body: JSON.stringify(data) }),
+  delete: (id) => request(`/customers/${id}`, { method: 'DELETE' })
+};
+
+// -----------------------------------------------------------------------------
+// Receipts API Endpoints (4. Inventory Operations)
+// -----------------------------------------------------------------------------
+export const receiptApi = {
+  getAll: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return request(`/receipts${query ? `?${query}` : ''}`);
+  },
+  getById: (id) => request(`/receipts/${id}`),
+  create: (data) => request('/receipts', { method: 'POST', body: JSON.stringify(data) }),
+  update: (id, data) => request(`/receipts/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  delete: (id) => request(`/receipts/${id}`, { method: 'DELETE' }),
+  validate: (id) => request(`/receipts/${id}/validate`, { method: 'POST' })
+};
+
+// -----------------------------------------------------------------------------
+// Deliveries API Endpoints (4. Inventory Operations)
+// -----------------------------------------------------------------------------
+export const deliveryApi = {
+  getAll: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return request(`/deliveries${query ? `?${query}` : ''}`);
+  },
+  getById: (id) => request(`/deliveries/${id}`),
+  create: (data) => request('/deliveries', { method: 'POST', body: JSON.stringify(data) }),
+  update: (id, data) => request(`/deliveries/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  delete: (id) => request(`/deliveries/${id}`, { method: 'DELETE' }),
+  pick: (id) => request(`/deliveries/${id}/pick`, { method: 'POST' }),
+  pack: (id) => request(`/deliveries/${id}/pack`, { method: 'POST' }),
+  validate: (id) => request(`/deliveries/${id}/validate`, { method: 'POST' })
+};
+
+// -----------------------------------------------------------------------------
+// Transfers API Endpoints (4. Inventory Operations)
+// -----------------------------------------------------------------------------
+export const transferApi = {
+  getAll: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return request(`/transfers${query ? `?${query}` : ''}`);
+  },
+  getById: (id) => request(`/transfers/${id}`),
+  create: (data) => request('/transfers', { method: 'POST', body: JSON.stringify(data) }),
+  update: (id, data) => request(`/transfers/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  delete: (id) => request(`/transfers/${id}`, { method: 'DELETE' }),
+  validate: (id) => request(`/transfers/${id}/validate`, { method: 'POST' })
+};
+
+// -----------------------------------------------------------------------------
+// Adjustments API Endpoints (4. Inventory Operations)
+// -----------------------------------------------------------------------------
+export const adjustmentApi = {
+  getAll: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return request(`/adjustments${query ? `?${query}` : ''}`);
+  },
+  getById: (id) => request(`/adjustments/${id}`),
+  create: (data) => request('/adjustments', { method: 'POST', body: JSON.stringify(data) }),
+  update: (id, data) => request(`/adjustments/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  delete: (id) => request(`/adjustments/${id}`, { method: 'DELETE' }),
+  validate: (id) => request(`/adjustments/${id}/validate`, { method: 'POST' })
+};
+
+// -----------------------------------------------------------------------------
+// Movements API Endpoints
+// -----------------------------------------------------------------------------
+export const movementApi = {
+  getAll: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return request(`/movements${query ? `?${query}` : ''}`);
+  },
+  create: (data) => request('/movements', { method: 'POST', body: JSON.stringify(data) })
+};
+
+// -----------------------------------------------------------------------------
+// Dashboard Statistics API Endpoint
+// -----------------------------------------------------------------------------
+export const dashboardApi = {
+  getStats: () => request('/dashboard/stats')
 };
 
 export default {
@@ -126,5 +196,13 @@ export default {
   category: categoryApi,
   uom: uomApi,
   warehouse: warehouseApi,
-  location: locationApi
+  location: locationApi,
+  supplier: supplierApi,
+  customer: customerApi,
+  receipt: receiptApi,
+  delivery: deliveryApi,
+  transfer: transferApi,
+  adjustment: adjustmentApi,
+  movement: movementApi,
+  dashboard: dashboardApi
 };

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Package,
   Truck,
@@ -16,18 +16,79 @@ import {
   ShieldCheck,
   Building2,
   MapPin,
-  Sparkles
+  Sparkles,
+  RefreshCw,
+  Layers
 } from 'lucide-react';
 import Navbar from '../../components/Navbar';
-import { INITIAL_STOCKS, INITIAL_ADJUSTMENTS } from '../../data/inventoryStore';
+import { dashboardApi, productApi, warehouseApi, receiptApi, deliveryApi } from '../../services/api';
 
 export default function DashboardPage() {
-  const totalStockValue = INITIAL_STOCKS.reduce(
-    (acc, item) => acc + item.onHand * item.perUnitCost,
+  const [stats, setStats] = useState(null);
+  const [products, setProducts] = useState([]);
+  const [warehouses, setWarehouses] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchDashboardData = async () => {
+    setLoading(true);
+    try {
+      const [statsRes, prodRes, whRes] = await Promise.all([
+        dashboardApi.getStats().catch(() => ({ data: null })),
+        productApi.getAll().catch(() => ({ data: [] })),
+        warehouseApi.getAll().catch(() => ({ data: [] }))
+      ]);
+
+      if (statsRes && statsRes.data) {
+        setStats(statsRes.data);
+      }
+      setProducts(prodRes?.data || []);
+      setWarehouses(whRes?.data || []);
+    } catch (err) {
+      console.error('Error loading dashboard data:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchDashboardData();
+  }, []);
+
+  // Calculated or fallback metrics
+  const totalStockValuation = stats?.products?.totalValuation ?? products.reduce(
+    (acc, item) => acc + (Number(item.onHand) || 0) * (Number(item.perUnitCost) || 0),
     0
   );
-  const totalUnitsOnHand = INITIAL_STOCKS.reduce((acc, item) => acc + item.onHand, 0);
-  const lowStockCount = INITIAL_STOCKS.filter((item) => item.onHand <= item.minStockAlert).length;
+
+  const totalPhysicalUnits = stats?.products?.totalPhysicalOnHand ?? products.reduce(
+    (acc, item) => acc + (Number(item.onHand) || 0),
+    0
+  );
+
+  const lowStockItemsCount = stats?.products?.lowStockCount ?? products.filter(
+    (item) => (Number(item.onHand) || 0) <= (Number(item.minStockAlert) || 5)
+  ).length;
+
+  const warehousesCount = stats?.facilities?.warehousesCount ?? warehouses.length;
+
+  // Receipts live stats
+  const receiptsTotal = stats?.receipts?.totalOperations ?? 0;
+  const receiptsToReceive = stats?.receipts?.toReceive ?? 0;
+  const receiptsReady = stats?.receipts?.ready ?? 0;
+  const receiptsDone = stats?.receipts?.done ?? 0;
+  const receiptsLate = stats?.receipts?.late ?? 0;
+  const receiptsPercentage = receiptsTotal > 0 ? Math.round((receiptsDone / receiptsTotal) * 100) : 0;
+
+  // Deliveries live stats
+  const deliveriesTotal = stats?.deliveries?.totalOperations ?? 0;
+  const deliveriesToDeliver = stats?.deliveries?.toDeliver ?? 0;
+  const deliveriesReady = stats?.deliveries?.ready ?? 0;
+  const deliveriesDone = stats?.deliveries?.done ?? 0;
+  const deliveriesLate = stats?.deliveries?.late ?? 0;
+  const deliveriesPercentage = deliveriesTotal > 0 ? Math.round(((deliveriesReady + deliveriesDone) / deliveriesTotal) * 100) : 0;
+
+  // Recent movements
+  const recentMovements = stats?.recentMovements || [];
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans antialiased pb-24">
@@ -47,12 +108,20 @@ export default function DashboardPage() {
               </span>
             </h1>
             <p className="text-sm text-slate-500 mt-1">
-              Central Warehouse (WH) • Real-time receipts, deliveries, and stock operations
+              Real-time synchronization with PostgreSQL database • Receipts, deliveries, physical counts & stock ledger
             </p>
           </div>
 
           {/* Quick Action Shortcuts */}
           <div className="flex flex-wrap items-center gap-2.5">
+            <button
+              type="button"
+              onClick={fetchDashboardData}
+              title="Refresh Live Metrics"
+              className="p-2 text-slate-600 bg-white hover:bg-slate-100 border border-slate-200 rounded-xl transition-colors cursor-pointer"
+            >
+              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-indigo-600' : ''}`} />
+            </button>
             <a
               href="/receipts"
               className="px-3.5 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
@@ -77,7 +146,7 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* Primary Operations KPI Cards: Receipts & Delivery (Requested by User) */}
+        {/* Primary Operations KPI Cards: Receipts & Delivery (Live from DB) */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           
           {/* RECEIPTS CARD */}
@@ -96,40 +165,43 @@ export default function DashboardPage() {
                   </div>
                 </div>
                 <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-slate-100 text-slate-700">
-                  6 Operations
+                  {receiptsTotal} {receiptsTotal === 1 ? 'Operation' : 'Operations'}
                 </span>
               </div>
 
-              {/* Metrics Breakdown: 4 to receive, 1 late, 6 operations */}
+              {/* Metrics Breakdown */}
               <div className="grid grid-cols-3 gap-3 py-6 text-center">
                 <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
-                  <span className="text-2xl font-bold font-mono text-indigo-700 block">4</span>
+                  <span className="text-2xl font-bold font-mono text-indigo-700 block">{receiptsToReceive}</span>
                   <span className="text-xs text-slate-600 font-medium">To Receive</span>
                 </div>
                 <div className="p-3 bg-rose-50/70 rounded-xl border border-rose-100">
-                  <span className="text-2xl font-bold font-mono text-rose-600 block">1</span>
+                  <span className="text-2xl font-bold font-mono text-rose-600 block">{receiptsLate}</span>
                   <span className="text-xs text-rose-700 font-medium">Late / Delayed</span>
                 </div>
                 <div className="p-3 bg-emerald-50/70 rounded-xl border border-emerald-100">
-                  <span className="text-2xl font-bold font-mono text-emerald-700 block">6</span>
-                  <span className="text-xs text-emerald-800 font-medium">Total Operations</span>
+                  <span className="text-2xl font-bold font-mono text-emerald-700 block">{receiptsDone}</span>
+                  <span className="text-xs text-emerald-800 font-medium">Validated & Done</span>
                 </div>
               </div>
 
               {/* Progress & Live Subtext */}
               <div className="space-y-2">
                 <div className="flex justify-between text-xs text-slate-600">
-                  <span>Receiving Dock Capacity</span>
-                  <span className="font-semibold text-slate-800">68% Handled</span>
+                  <span>Receiving Dock Completion</span>
+                  <span className="font-semibold text-slate-800 font-mono">{receiptsPercentage}% Completed</span>
                 </div>
                 <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
-                  <div className="bg-indigo-600 h-2 rounded-full w-[68%]"></div>
+                  <div
+                    className="bg-indigo-600 h-2 rounded-full transition-all duration-500"
+                    style={{ width: `${receiptsPercentage}%` }}
+                  />
                 </div>
               </div>
             </div>
 
             <div className="pt-5 mt-4 border-t border-slate-100 flex items-center justify-between">
-              <span className="text-xs text-slate-500">Next expected: <strong className="text-slate-800">TechLogix (WH/IN/001)</strong></span>
+              <span className="text-xs text-slate-500">Auto Reference: <strong className="text-slate-800 font-mono">WH/IN/001</strong></span>
               <a
                 href="/receipts"
                 className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 group-hover:translate-x-0.5 transition-transform"
@@ -155,27 +227,27 @@ export default function DashboardPage() {
                   </div>
                 </div>
                 <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-slate-100 text-slate-700">
-                  6 Operations
+                  {deliveriesTotal} {deliveriesTotal === 1 ? 'Operation' : 'Operations'}
                 </span>
               </div>
 
-              {/* Metrics Breakdown: 4 to deliver, 1 late, 2 waiting, 6 operations */}
+              {/* Metrics Breakdown: to deliver, late, waiting (ready), done */}
               <div className="grid grid-cols-4 gap-2.5 py-6 text-center">
                 <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
-                  <span className="text-xl font-bold font-mono text-emerald-700 block">4</span>
+                  <span className="text-xl font-bold font-mono text-emerald-700 block">{deliveriesToDeliver}</span>
                   <span className="text-[11px] text-slate-600 font-medium">To Deliver</span>
                 </div>
                 <div className="p-3 bg-rose-50/70 rounded-xl border border-rose-100">
-                  <span className="text-xl font-bold font-mono text-rose-600 block">1</span>
+                  <span className="text-xl font-bold font-mono text-rose-600 block">{deliveriesLate}</span>
                   <span className="text-[11px] text-rose-700 font-medium">Late</span>
                 </div>
-                <div className="p-3 bg-amber-50/70 rounded-xl border border-amber-100">
-                  <span className="text-xl font-bold font-mono text-amber-700 block">2</span>
-                  <span className="text-[11px] text-amber-800 font-medium">Waiting</span>
+                <div className="p-3 bg-purple-50/70 rounded-xl border border-purple-100">
+                  <span className="text-xl font-bold font-mono text-purple-700 block">{deliveriesReady}</span>
+                  <span className="text-[11px] text-purple-800 font-medium">Ready (Packed)</span>
                 </div>
-                <div className="p-3 bg-slate-100/70 rounded-xl border border-slate-200">
-                  <span className="text-xl font-bold font-mono text-slate-800 block">6</span>
-                  <span className="text-[11px] text-slate-600 font-medium">Operations</span>
+                <div className="p-3 bg-emerald-50/70 rounded-xl border border-emerald-100">
+                  <span className="text-xl font-bold font-mono text-emerald-800 block">{deliveriesDone}</span>
+                  <span className="text-[11px] text-emerald-800 font-medium">Dispatched</span>
                 </div>
               </div>
 
@@ -183,16 +255,19 @@ export default function DashboardPage() {
               <div className="space-y-2">
                 <div className="flex justify-between text-xs text-slate-600">
                   <span>Dispatch Staging Fulfillment</span>
-                  <span className="font-semibold text-slate-800">83% Ready</span>
+                  <span className="font-semibold text-slate-800 font-mono">{deliveriesPercentage}% Ready/Done</span>
                 </div>
                 <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
-                  <div className="bg-emerald-600 h-2 rounded-full w-[83%]"></div>
+                  <div
+                    className="bg-emerald-600 h-2 rounded-full transition-all duration-500"
+                    style={{ width: `${deliveriesPercentage}%` }}
+                  />
                 </div>
               </div>
             </div>
 
             <div className="pt-5 mt-4 border-t border-slate-100 flex items-center justify-between">
-              <span className="text-xs text-slate-500">Next dispatch: <strong className="text-slate-800">Bharat Dynamics (WH/OUT/001)</strong></span>
+              <span className="text-xs text-slate-500">Auto Reference: <strong className="text-slate-800 font-mono">WH/OUT/001</strong></span>
               <a
                 href="/deliveries"
                 className="text-xs font-semibold text-emerald-600 hover:text-emerald-800 flex items-center gap-1 group-hover:translate-x-0.5 transition-transform"
@@ -204,7 +279,7 @@ export default function DashboardPage() {
 
         </div>
 
-        {/* Secondary Metric Cards (Stock Value, Total Units, Adjustments, Transfers) */}
+        {/* Secondary Metric Cards (Stock Value, Total Units, Adjustments, Warehouses) */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           
           <div className="p-5 bg-white rounded-2xl border border-slate-200 shadow-2xs">
@@ -213,9 +288,9 @@ export default function DashboardPage() {
               <Boxes className="w-4 h-4 text-indigo-600" />
             </div>
             <div className="text-2xl font-bold font-mono text-slate-900">
-              ₹{totalStockValue.toLocaleString()}
+              ₹{totalStockValuation.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </div>
-            <p className="text-xs text-slate-500 mt-1">Across 6 managed product lines</p>
+            <p className="text-xs text-slate-500 mt-1">Across {products.length} registered product items</p>
           </div>
 
           <div className="p-5 bg-white rounded-2xl border border-slate-200 shadow-2xs">
@@ -224,21 +299,21 @@ export default function DashboardPage() {
               <TrendingUp className="w-4 h-4 text-emerald-600" />
             </div>
             <div className="text-2xl font-bold font-mono text-slate-900">
-              {totalUnitsOnHand.toLocaleString()} <span className="text-xs font-normal text-slate-500">Units</span>
+              {totalPhysicalUnits.toLocaleString()} <span className="text-xs font-normal text-slate-500">Units</span>
             </div>
-            <p className="text-xs text-slate-500 mt-1">All storage racks combined</p>
+            <p className="text-xs text-slate-500 mt-1">All warehouse bins combined</p>
           </div>
 
           <div className="p-5 bg-white rounded-2xl border border-slate-200 shadow-2xs">
             <div className="flex items-center justify-between text-slate-500 mb-2">
-              <span className="text-xs font-semibold uppercase tracking-wider">Stock Adjustments</span>
-              <SlidersHorizontal className="w-4 h-4 text-amber-600" />
+              <span className="text-xs font-semibold uppercase tracking-wider">Low Stock Alerts</span>
+              <AlertTriangle className="w-4 h-4 text-amber-600" />
             </div>
-            <div className="text-2xl font-bold font-mono text-slate-900">
-              {INITIAL_ADJUSTMENTS.length} <span className="text-xs font-normal text-slate-500">Logged</span>
+            <div className="text-2xl font-bold font-mono text-amber-700">
+              {lowStockItemsCount} <span className="text-xs font-normal text-slate-500">Items</span>
             </div>
             <p className="text-xs text-slate-500 mt-1">
-              <a href="/adjustments" className="text-indigo-600 hover:underline">Reconcile counts &rarr;</a>
+              <a href="/stock" className="text-indigo-600 hover:underline">Inspect stock &rarr;</a>
             </p>
           </div>
 
@@ -248,7 +323,7 @@ export default function DashboardPage() {
               <Building2 className="w-4 h-4 text-blue-600" />
             </div>
             <div className="text-2xl font-bold font-mono text-slate-900">
-              3 <span className="text-xs font-normal text-slate-500">Hubs (WH, WH-N, WH-S)</span>
+              {warehousesCount} <span className="text-xs font-normal text-slate-500">Facilities</span>
             </div>
             <p className="text-xs text-slate-500 mt-1">
               <a href="/settings/warehouses" className="text-indigo-600 hover:underline">Manage facilities &rarr;</a>
@@ -257,12 +332,92 @@ export default function DashboardPage() {
 
         </div>
 
+        {/* Recent Stock Movement History Ledger */}
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+          <div className="p-5 border-b border-slate-100 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Layers className="w-4 h-4 text-indigo-600" />
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">Recent Stock Movements (Audit Ledger)</h3>
+                <p className="text-xs text-slate-500">Live feed of receipts, dispatches, bay shifts, and count variances</p>
+              </div>
+            </div>
+            <a
+              href="/movements"
+              className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 flex items-center gap-1"
+            >
+              Open Full Ledger &rarr;
+            </a>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs sm:text-sm">
+              <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200">
+                <tr>
+                  <th className="py-2.5 px-4 w-24">Type</th>
+                  <th className="py-2.5 px-4">Reference</th>
+                  <th className="py-2.5 px-4">Product Name</th>
+                  <th className="py-2.5 px-4">From Location</th>
+                  <th className="py-2.5 px-4">To Location</th>
+                  <th className="py-2.5 px-4 text-right">Quantity</th>
+                  <th className="py-2.5 px-4 text-right">Balance After</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {recentMovements.length === 0 ? (
+                  <tr>
+                    <td colSpan="7" className="py-8 text-center text-slate-400 text-xs">
+                      No stock movements recorded yet. Validated receipts or deliveries will log entries here automatically.
+                    </td>
+                  </tr>
+                ) : (
+                  recentMovements.slice(0, 5).map((mov) => {
+                    const isIn = mov.type === 'IN';
+                    const isOut = mov.type === 'OUT';
+                    return (
+                      <tr key={mov.id} className="hover:bg-slate-50/70">
+                        <td className="py-2.5 px-4">
+                          <span
+                            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold uppercase ${
+                              isIn
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : isOut
+                                ? 'bg-rose-100 text-rose-800'
+                                : mov.type === 'ADJUSTMENT'
+                                ? 'bg-amber-100 text-amber-800'
+                                : 'bg-blue-100 text-blue-800'
+                            }`}
+                          >
+                            {mov.type}
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-4 font-mono font-bold text-slate-900">{mov.reference}</td>
+                        <td className="py-2.5 px-4 font-medium text-slate-800">{mov.productName}</td>
+                        <td className="py-2.5 px-4 text-slate-500 font-mono text-xs">{mov.fromLocation || '—'}</td>
+                        <td className="py-2.5 px-4 text-slate-500 font-mono text-xs">{mov.toLocation || '—'}</td>
+                        <td className="py-2.5 px-4 text-right font-mono font-bold">
+                          <span className={isIn ? 'text-emerald-700' : isOut ? 'text-rose-700' : 'text-slate-800'}>
+                            {isIn ? `+${mov.quantity}` : isOut ? `-${mov.quantity}` : mov.quantity} {mov.unit || 'Units'}
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-4 text-right font-mono text-slate-600">
+                          {mov.balanceAfter !== null && mov.balanceAfter !== undefined ? `${mov.balanceAfter} ${mov.unit || 'Units'}` : '—'}
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
         {/* Quick Stock Snapshot Table */}
         <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
           <div className="p-5 border-b border-slate-100 flex items-center justify-between">
             <div>
               <h3 className="text-sm font-bold text-slate-900">Stock Availability Quick Snapshot</h3>
-              <p className="text-xs text-slate-500">Instant on-hand vs free-to-use breakdown</p>
+              <p className="text-xs text-slate-500">Instant on-hand vs free-to-use breakdown from database</p>
             </div>
             <a
               href="/stock"
@@ -285,16 +440,40 @@ export default function DashboardPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {INITIAL_STOCKS.slice(0, 4).map((stk) => (
-                  <tr key={stk.id} className="hover:bg-slate-50/70">
-                    <td className="py-3 px-4 font-medium text-slate-900">{stk.name}</td>
-                    <td className="py-3 px-4 font-mono text-slate-500 text-xs">{stk.sku}</td>
-                    <td className="py-3 px-4 text-right font-mono">₹{stk.perUnitCost.toLocaleString()}</td>
-                    <td className="py-3 px-4 text-right font-bold text-slate-900 font-mono">{stk.onHand} {stk.unit}</td>
-                    <td className="py-3 px-4 text-right font-bold text-emerald-700 font-mono">{stk.freeToUse} {stk.unit}</td>
-                    <td className="py-3 px-4 text-slate-600 text-xs font-mono">{stk.location}</td>
+                {products.length === 0 ? (
+                  <tr>
+                    <td colSpan="6" className="py-10 text-center text-slate-400">
+                      <Package className="w-8 h-8 mx-auto text-slate-300 mb-2" />
+                      <p className="font-semibold text-slate-700 text-sm">No products in database</p>
+                      <p className="text-xs text-slate-400 mt-0.5">Add products to see stock availability snapshots.</p>
+                      <a
+                        href="/product"
+                        className="mt-3 inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-xs"
+                      >
+                        <Plus className="w-3 h-3" /> Add Product
+                      </a>
+                    </td>
                   </tr>
-                ))}
+                ) : (
+                  products.slice(0, 5).map((stk) => (
+                    <tr key={stk.id} className="hover:bg-slate-50/70">
+                      <td className="py-3 px-4 font-medium text-slate-900">{stk.name}</td>
+                      <td className="py-3 px-4 font-mono text-slate-500 text-xs">{stk.sku}</td>
+                      <td className="py-3 px-4 text-right font-mono">
+                        ₹{Number(stk.perUnitCost || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                      </td>
+                      <td className="py-3 px-4 text-right font-bold text-slate-900 font-mono">
+                        {stk.onHand} {stk.uom?.name || stk.unit || 'Units'}
+                      </td>
+                      <td className="py-3 px-4 text-right font-bold text-emerald-700 font-mono">
+                        {stk.freeToUse ?? stk.onHand} {stk.uom?.name || stk.unit || 'Units'}
+                      </td>
+                      <td className="py-3 px-4 text-slate-600 text-xs font-mono">
+                        {stk.location?.name || stk.location || 'Central WH'}
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
