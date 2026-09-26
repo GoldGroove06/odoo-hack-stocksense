@@ -91,7 +91,7 @@ export const createAdjustment = async (req, res) => {
       countedDate,
       locationId,
       reason = "Physical Stock Audit / Recount",
-      responsible = "Rohit Maurya",
+      responsible = "Warehouse Staff",
       notes,
       items = []
     } = req.body;
@@ -295,12 +295,17 @@ export const validateAdjustment = async (req, res) => {
         const freeDiff = counted - p.onHand;
         const newFree = Math.max(0, p.freeToUse + freeDiff);
 
+        const updatedData = {
+          onHand: counted,
+          freeToUse: newFree
+        };
+        if (item.perUnitCost && Number(item.perUnitCost) > 0) {
+          updatedData.perUnitCost = Number(item.perUnitCost);
+        }
+
         await prisma.product.update({
           where: { id: p.id },
-          data: {
-            onHand: counted,
-            freeToUse: newFree
-          }
+          data: updatedData
         });
 
         movementsToCreate.push({
@@ -315,7 +320,7 @@ export const validateAdjustment = async (req, res) => {
           unit: item.unit || "Units",
           balanceAfter: counted,
           reason: `Physical Count Adjustment (${adjustment.reference}) - Variance: ${diff > 0 ? `+${diff}` : diff}`,
-          responsible: adjustment.responsible || "Rohit Maurya"
+          responsible: adjustment.responsible || "Warehouse Staff"
         });
       }
     }

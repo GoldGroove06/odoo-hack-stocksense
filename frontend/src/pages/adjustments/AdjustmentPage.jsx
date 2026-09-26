@@ -18,9 +18,13 @@ import {
   Trash2
 } from 'lucide-react';
 import Navbar from '../../components/Navbar';
+import { useAuth } from '../../context/AuthContext';
 import { adjustmentApi, productApi, locationApi } from '../../services/api';
 
 export default function AdjustmentPage() {
+  const { user } = useAuth();
+  const loggedInUserName = user?.name || 'Warehouse Staff';
+
   const [adjustments, setAdjustments] = useState([]);
   const [products, setProducts] = useState([]);
   const [locations, setLocations] = useState([]);
@@ -35,7 +39,7 @@ export default function AdjustmentPage() {
     locationId: '',
     countedQty: '',
     reason: 'Physical cycle count variance',
-    responsible: 'Rohit Maurya',
+    responsible: loggedInUserName,
     notes: ''
   });
 
@@ -113,7 +117,7 @@ export default function AdjustmentPage() {
         countedDate: new Date().toISOString().split('T')[0],
         locationId: newAdj.locationId ? parseInt(newAdj.locationId) : null,
         reason: newAdj.reason || 'Physical Stock Audit / Recount',
-        responsible: newAdj.responsible || 'Rohit Maurya',
+        responsible: newAdj.responsible || loggedInUserName,
         notes: newAdj.notes,
         items: [
           {
@@ -136,7 +140,7 @@ export default function AdjustmentPage() {
         locationId: '',
         countedQty: '',
         reason: 'Physical cycle count variance',
-        responsible: 'Rohit Maurya',
+        responsible: loggedInUserName,
         notes: ''
       });
       await fetchAdjustmentsData();

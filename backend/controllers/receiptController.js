@@ -100,7 +100,7 @@ export const createReceipt = async (req, res) => {
       status = "draft",
       scheduledDate,
       receiveFrom,
-      responsible = "Rohit Maurya",
+      responsible = "Warehouse Staff",
       sellerBillNumber,
       sourceDocument,
       internalNotes,
@@ -113,6 +113,14 @@ export const createReceipt = async (req, res) => {
       moNumber,
       items = []
     } = req.body;
+
+    const todayStr = new Date().toISOString().split("T")[0];
+    if (scheduledDate && scheduledDate < todayStr) {
+      return res.status(400).json({
+        success: false,
+        message: "Scheduled date cannot be in the past (must be today or later)"
+      });
+    }
 
     const finalReference = reference || (await generateReceiptReference(warehouseId));
 
@@ -142,7 +150,7 @@ export const createReceipt = async (req, res) => {
       data: {
         reference: finalReference,
         status,
-        scheduledDate: scheduledDate || new Date().toISOString().split("T")[0],
+        scheduledDate: scheduledDate || todayStr,
         receiveFrom,
         responsible,
         sellerBillNumber,
@@ -165,6 +173,64 @@ export const createReceipt = async (req, res) => {
         items: true
       }
     });
+
+    // If receipt is created directly in 'done' status, increase stock immediately
+    if (status === "done") {
+      const movementsToCreate = [];
+      for (const item of receipt.items) {
+        const qty = Number(item.quantity) || 0;
+        const itemCost = Number(item.unitCost) || 0;
+
+        let product = null;
+        if (item.productId) {
+          product = await prisma.product.findUnique({ where: { id: item.productId } });
+        } else if (item.sku) {
+          product = await prisma.product.findUnique({ where: { sku: item.sku } });
+        }
+
+        if (product) {
+          const newOnHand = product.onHand + qty;
+          const newFree = product.freeToUse + qty;
+
+          let newUnitCost = product.perUnitCost || 0;
+          if (itemCost > 0) {
+            if (product.onHand <= 0 || !product.perUnitCost) {
+              newUnitCost = itemCost;
+            } else if (newOnHand > 0) {
+              newUnitCost = Math.round(((product.onHand * product.perUnitCost) + (qty * itemCost)) / newOnHand * 100) / 100;
+            }
+          }
+
+          await prisma.product.update({
+            where: { id: product.id },
+            data: {
+              onHand: newOnHand,
+              freeToUse: newFree,
+              perUnitCost: newUnitCost
+            }
+          });
+
+          movementsToCreate.push({
+            reference: receipt.reference,
+            type: "IN",
+            productId: product.id,
+            productName: product.name,
+            sku: product.sku,
+            fromLocation: receipt.supplier?.name || receipt.receiveFrom || "Vendor / Supplier",
+            toLocation: receipt.warehouse?.name || "Central Stock Room",
+            quantity: qty,
+            unit: item.unit || "Units",
+            balanceAfter: newOnHand,
+            reason: `Direct Receipt (${receipt.reference})`,
+            responsible: receipt.responsible || "Warehouse Staff"
+          });
+        }
+      }
+
+      if (movementsToCreate.length > 0) {
+        await prisma.stockMovement.createMany({ data: movementsToCreate });
+      }
+    }
 
     res.status(201).json({
       success: true,
@@ -307,65 +373,52 @@ export const validateReceipt = async (req, res) => {
 
     for (const item of receipt.items) {
       const qty = Number(item.quantity) || 0;
+      const itemCost = Number(item.unitCost) || 0;
 
+      let product = null;
       if (item.productId) {
-        const product = await prisma.product.findUnique({ where: { id: item.productId } });
-        if (product) {
-          const newOnHand = product.onHand + qty;
-          const newFree = product.freeToUse + qty;
-
-          await prisma.product.update({
-            where: { id: product.id },
-            data: {
-              onHand: newOnHand,
-              freeToUse: newFree
-            }
-          });
-
-          movementsToCreate.push({
-            reference: receipt.reference,
-            type: "IN",
-            productId: product.id,
-            productName: product.name,
-            sku: product.sku,
-            fromLocation: receipt.supplier?.name || receipt.receiveFrom || "Vendor / Supplier",
-            toLocation: receipt.warehouse?.name || "Central Stock Room",
-            quantity: qty,
-            unit: item.unit || "Units",
-            balanceAfter: newOnHand,
-            reason: `Receipt Validation (${receipt.reference})`,
-            responsible: receipt.responsible || "Rohit Maurya"
-          });
-        }
+        product = await prisma.product.findUnique({ where: { id: item.productId } });
       } else if (item.sku) {
-        const product = await prisma.product.findUnique({ where: { sku: item.sku } });
-        if (product) {
-          const newOnHand = product.onHand + qty;
-          const newFree = product.freeToUse + qty;
+        product = await prisma.product.findUnique({ where: { sku: item.sku } });
+      }
 
-          await prisma.product.update({
-            where: { id: product.id },
-            data: {
-              onHand: newOnHand,
-              freeToUse: newFree
-            }
-          });
+      if (product) {
+        const newOnHand = product.onHand + qty;
+        const newFree = product.freeToUse + qty;
 
-          movementsToCreate.push({
-            reference: receipt.reference,
-            type: "IN",
-            productId: product.id,
-            productName: product.name,
-            sku: product.sku,
-            fromLocation: receipt.supplier?.name || receipt.receiveFrom || "Vendor / Supplier",
-            toLocation: receipt.warehouse?.name || "Central Stock Room",
-            quantity: qty,
-            unit: item.unit || "Units",
-            balanceAfter: newOnHand,
-            reason: `Receipt Validation (${receipt.reference})`,
-            responsible: receipt.responsible || "Rohit Maurya"
-          });
+        // Weighted average cost adjustment
+        let newUnitCost = product.perUnitCost || 0;
+        if (itemCost > 0) {
+          if (product.onHand <= 0 || !product.perUnitCost) {
+            newUnitCost = itemCost;
+          } else if (newOnHand > 0) {
+            newUnitCost = Math.round(((product.onHand * product.perUnitCost) + (qty * itemCost)) / newOnHand * 100) / 100;
+          }
         }
+
+        await prisma.product.update({
+          where: { id: product.id },
+          data: {
+            onHand: newOnHand,
+            freeToUse: newFree,
+            perUnitCost: newUnitCost
+          }
+        });
+
+        movementsToCreate.push({
+          reference: receipt.reference,
+          type: "IN",
+          productId: product.id,
+          productName: product.name,
+          sku: product.sku,
+          fromLocation: receipt.supplier?.name || receipt.receiveFrom || "Vendor / Supplier",
+          toLocation: receipt.warehouse?.name || "Central Stock Room",
+          quantity: qty,
+          unit: item.unit || "Units",
+          balanceAfter: newOnHand,
+          reason: `Receipt Validation (${receipt.reference})`,
+          responsible: receipt.responsible || "Warehouse Staff"
+        });
       }
 
       await prisma.receiptItem.update({

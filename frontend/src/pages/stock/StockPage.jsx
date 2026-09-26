@@ -21,7 +21,6 @@ import {
 } from 'lucide-react';
 import Navbar from '../../components/Navbar';
 import { productApi, categoryApi, locationApi } from '../../services/api';
-import { INITIAL_STOCKS, INITIAL_LOCATIONS } from '../../data/inventoryStore';
 
 export default function StockPage() {
   const [stocks, setStocks] = useState([]);
@@ -223,7 +222,7 @@ export default function StockPage() {
       unit: 'Units',
       perUnitCost: '',
       onHand: '',
-      location: locations[0]?.name || INITIAL_LOCATIONS[0].name
+      location: locations[0]?.name || ''
     });
     showToast(`Added new stock item "${newItem.name}"`);
   };
@@ -716,11 +715,15 @@ export default function StockPage() {
                   onChange={(e) => setNewProduct({ ...newProduct, location: e.target.value })}
                   className="w-full px-3.5 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none text-xs"
                 >
-                  {INITIAL_LOCATIONS.map((loc) => (
-                    <option key={loc.id} value={loc.name}>
-                      {loc.name}
-                    </option>
-                  ))}
+                  {locations.length === 0 ? (
+                    <option value="">Default Warehouse Storage</option>
+                  ) : (
+                    locations.map((loc) => (
+                      <option key={loc.id} value={loc.name}>
+                        {loc.name}
+                      </option>
+                    ))
+                  )}
                 </select>
               </div>
 

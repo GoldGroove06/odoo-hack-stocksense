@@ -40,7 +40,7 @@ export const SAMPLE_CUSTOMERS = [
 ];
 
 export const DISPATCH_STAFF = [
-  { id: 'staff-1', name: 'Rohit Maurya', role: 'Logistics Supervisor' },
+  { id: 'staff-1', name: 'Warehouse Staff', role: 'Logistics Supervisor' },
   { id: 'staff-2', name: 'Kavita Nair', role: 'Dispatch Coordinator' },
   { id: 'staff-3', name: 'Devendra Patel', role: 'Operations Manager' },
   { id: 'staff-4', name: 'Rahul Verma', role: 'Fleet Manager' }
@@ -109,7 +109,7 @@ export const INITIAL_DELIVERIES_LIST = [
     customerReference: 'PO-BD-7719',
     createdOn: '2026-09-26 11:15 AM',
     scheduledDate: '2026-09-29',
-    responsible: 'Rohit Maurya',
+    responsible: 'Warehouse Staff',
     responsibleId: 'staff-1',
     status: 'ready', // 'draft' | 'in_progress' | 'ready' | 'done' | 'cancelled'
     movementStatus: 'packing',

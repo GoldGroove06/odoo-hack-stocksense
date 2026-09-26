@@ -97,7 +97,7 @@ export const createTransfer = async (req, res) => {
       scheduledDate,
       fromLocationId,
       toLocationId,
-      responsible = "Rohit Maurya",
+      responsible = "Warehouse Staff",
       moNumber,
       notes,
       items = []
@@ -284,7 +284,7 @@ export const validateTransfer = async (req, res) => {
         unit: item.unit || "Units",
         balanceAfter: p ? p.onHand : null,
         reason: `Internal Transfer (${transfer.reference})${transfer.moNumber ? ` - MO: ${transfer.moNumber}` : ""}`,
-        responsible: transfer.responsible || "Rohit Maurya"
+        responsible: transfer.responsible || "Warehouse Staff"
       });
 
       await prisma.transferItem.update({

@@ -15,10 +15,11 @@ import {
   RefreshCw
 } from 'lucide-react';
 import Navbar from '../../components/Navbar';
+import { useAuth } from '../../context/AuthContext';
 import { warehouseApi } from '../../services/api';
-import { INITIAL_WAREHOUSES } from '../../data/inventoryStore';
 
 export default function WarehousesPage() {
+  const { user } = useAuth();
   const [warehouses, setWarehouses] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -68,7 +69,7 @@ export default function WarehousesPage() {
       name: '',
       shortcode: '',
       address: '',
-      manager: 'Rohit Maurya',
+      manager: user?.name || 'Warehouse Manager',
       phone: '+91 98200 00000',
       capacity: '5,000 m³'
     });

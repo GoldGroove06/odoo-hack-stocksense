@@ -21,7 +21,6 @@ import {
 } from 'lucide-react';
 import Navbar from '../../components/Navbar';
 import { productApi, categoryApi, uomApi, locationApi } from '../../services/api';
-import { INITIAL_STOCKS, INITIAL_LOCATIONS } from '../../data/inventoryStore';
 
 export default function Product() {
   const [products, setProducts] = useState([]);

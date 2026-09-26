@@ -27,6 +27,7 @@ import {
   Cpu,
   ListOrdered
 } from 'lucide-react';
+import { useAuth } from '../../context/AuthContext';
 import { receiptApi, supplierApi, warehouseApi, productApi } from '../../services/api';
 import AddProductModal from './AddProductModal';
 import SupplierModal from './SupplierModal';
@@ -35,6 +36,9 @@ import ReceiptsListView from './ReceiptsListView';
 import Navbar from '../../components/Navbar';
 
 export default function ReceiptPage() {
+  const { user } = useAuth();
+  const loggedInUserName = user?.name || 'Warehouse Staff';
+
   const [receiptsList, setReceiptsList] = useState([]);
   const [loading, setLoading] = useState(true);
   const [currentView, setCurrentView] = useState('list'); // 'list' (default land) | 'detail'
@@ -49,7 +53,7 @@ export default function ReceiptPage() {
     contact: '',
     sellerBillNumber: '',
     scheduledDate: new Date().toISOString().split('T')[0],
-    responsible: 'Rohit Maurya',
+    responsible: loggedInUserName,
     sourceDocument: '',
     warehouseLocation: 'Central Stock Room',
     notes: '',
@@ -93,10 +97,10 @@ export default function ReceiptPage() {
         movementStatus: r.status === 'done' ? 'received' : r.status === 'ready' ? 'arrived' : r.status === 'in_progress' ? 'moving' : 'creation',
         from: r.receiveFrom || (r.supplier ? r.supplier.name : 'Vendor / Supplier'),
         to: r.warehouse ? r.warehouse.name : 'Central Stock Room',
-        contact: r.supplier ? `${r.supplier.contactPerson || ''} (${r.supplier.phone || ''})` : r.responsible,
+        contact: r.supplier ? `${r.supplier.contactPerson || ''} (${r.supplier.phone || ''})` : (r.responsible || loggedInUserName),
         sellerBillNumber: r.sellerBillNumber || '',
         scheduledDate: r.scheduledDate || '',
-        responsible: r.responsible || 'Rohit Maurya',
+        responsible: r.responsible || loggedInUserName,
         sourceDocument: r.sourceDocument || '',
         warehouseLocation: r.warehouse ? r.warehouse.name : 'Central Stock Room',
         notes: r.internalNotes || '',
@@ -135,7 +139,7 @@ export default function ReceiptPage() {
 
   useEffect(() => {
     fetchReceipts();
-  }, []);
+  }, [user]);
 
   // Financial calculations
   const subtotal = useMemo(() => {
@@ -205,6 +209,12 @@ export default function ReceiptPage() {
       return;
     }
 
+    const todayStr = new Date().toISOString().split('T')[0];
+    if (receipt.scheduledDate && receipt.scheduledDate < todayStr) {
+      showToast('Scheduled date cannot be in the past (must be today or later)!', 'error');
+      return;
+    }
+
     try {
       if (receipt.isNew || !receipt.id) {
         // Save first then validate
@@ -212,7 +222,7 @@ export default function ReceiptPage() {
           status: 'done',
           scheduledDate: receipt.scheduledDate,
           receiveFrom: receipt.from || receipt.supplier?.name || 'Vendor',
-          responsible: receipt.responsible,
+          responsible: receipt.responsible || loggedInUserName,
           sellerBillNumber: receipt.sellerBillNumber,
           internalNotes: receipt.notes,
           subtotal,
@@ -250,12 +260,18 @@ export default function ReceiptPage() {
   };
 
   const handleSaveReceipt = async () => {
+    const todayStr = new Date().toISOString().split('T')[0];
+    if (receipt.scheduledDate && receipt.scheduledDate < todayStr) {
+      showToast('Scheduled date cannot be in the past (must be today or later)!', 'error');
+      return;
+    }
+
     try {
       const payload = {
         status: receipt.status || 'draft',
         scheduledDate: receipt.scheduledDate,
         receiveFrom: receipt.from || receipt.supplier?.name || 'Vendor',
-        responsible: receipt.responsible || 'Rohit Maurya',
+        responsible: receipt.responsible || loggedInUserName,
         sellerBillNumber: receipt.sellerBillNumber,
         internalNotes: receipt.notes,
         subtotal,
@@ -331,7 +347,7 @@ export default function ReceiptPage() {
 
   // Open detail view for a selected receipt
   const handleSelectReceipt = (selected) => {
-    setReceipt({ ...selected, isNew: false });
+    setReceipt({ ...selected, isNew: false, responsible: selected.responsible || loggedInUserName });
     setCurrentView('detail');
   };
 
@@ -347,10 +363,10 @@ export default function ReceiptPage() {
       reference: nextRef,
       from: suppliers[0]?.name || 'Supplier / Vendor',
       to: warehouses[0]?.name || 'Central Stock Room',
-      contact: suppliers[0] ? `${suppliers[0].contactPerson || ''} (${suppliers[0].phone || ''})` : 'Rohit Maurya',
+      contact: suppliers[0] ? `${suppliers[0].contactPerson || ''} (${suppliers[0].phone || ''})` : loggedInUserName,
       sellerBillNumber: '',
       scheduledDate: new Date().toISOString().split('T')[0],
-      responsible: 'Rohit Maurya',
+      responsible: loggedInUserName,
       status: 'draft',
       movementStatus: 'creation',
       sourceDocument: '',
@@ -779,6 +795,7 @@ export default function ReceiptPage() {
                     </label>
                     <input
                       type="date"
+                      min={new Date().toISOString().split('T')[0]}
                       value={receipt.scheduledDate || ''}
                       onChange={(e) => setReceipt({ ...receipt, scheduledDate: e.target.value })}
                       className="w-full px-3.5 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:bg-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all font-medium text-slate-800"
@@ -792,7 +809,7 @@ export default function ReceiptPage() {
                     </label>
                     <input
                       type="text"
-                      value={receipt.responsible || 'Rohit Maurya'}
+                      value={receipt.responsible || loggedInUserName}
                       onChange={(e) => setReceipt({ ...receipt, responsible: e.target.value })}
                       className="w-full px-3.5 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:bg-white font-medium text-slate-800"
                     />
