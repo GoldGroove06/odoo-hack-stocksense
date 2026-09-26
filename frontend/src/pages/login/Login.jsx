@@ -1,8 +1,11 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { loginUser } from "../../api/auth";
+import { useAuth } from "../../context/AuthContext";
+
 const Login = () => {
   const navigate = useNavigate();
+  const { setSession } = useAuth();
 
   const [formData, setFormData] = useState({
     email: "",
@@ -28,10 +31,13 @@ const Login = () => {
     try {
       const data = await loginUser(formData);
 
-      localStorage.setItem("token", data.token);
-      localStorage.setItem("user", JSON.stringify(data.user));
+      if (data.requiresPasswordReset) {
+        navigate("/reset-password", { state: { email: data.email } });
+        return;
+      }
 
-      navigate("/dashboard");
+      setSession(data.token, data.user);
+      navigate(data.user.companyId ? "/dashboard" : "/create-company");
     } catch (error) {
       setError(
         error.response?.data?.message || "Login failed. Please try again.",
@@ -46,7 +52,6 @@ const Login = () => {
       <div className="w-full max-w-md bg-white rounded-2xl shadow-lg p-8">
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-gray-900">Welcome Back</h1>
-
           <p className="text-gray-500 mt-2">Login to your StockSense account</p>
         </div>
 
@@ -61,7 +66,6 @@ const Login = () => {
             <label className="block text-sm font-medium text-gray-700 mb-2">
               Email
             </label>
-
             <input
               type="email"
               name="email"
@@ -77,7 +81,6 @@ const Login = () => {
             <label className="block text-sm font-medium text-gray-700 mb-2">
               Password
             </label>
-
             <input
               type="password"
               name="password"

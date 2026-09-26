@@ -7,19 +7,45 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model User {
-  id        Int      @id @default(autoincrement())
-  name      String
-  email     String   @unique
-  password  String
-  role      Role     @default(WAREHOUSE_STAFF)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
 enum Role {
+  OWNER
   INVENTORY_MANAGER
   WAREHOUSE_STAFF
+}
+
+model Company {
+  id        Int      @id @default(autoincrement())
+  name      String
+  address   String
+  phone     String
+  gstNumber String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  users     User[]
+}
+
+model User {
+  id                Int                @id @default(autoincrement())
+  name              String
+  email             String             @unique
+  password          String
+  role              Role               @default(WAREHOUSE_STAFF)
+  companyId         Int?
+  company           Company?           @relation(fields: [companyId], references: [id])
+  mustResetPassword Boolean            @default(false)
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  passwordResetOtps PasswordResetOtp[]
+}
+
+model PasswordResetOtp {
+  id        Int       @id @default(autoincrement())
+  userId    Int
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  codeHash  String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
 }
 
 // -----------------------------------------------------------------------------
@@ -59,18 +85,18 @@ model Warehouse {
 }
 
 model Location {
-  id            Int             @id @default(autoincrement())
+  id            Int          @id @default(autoincrement())
   name          String
-  shortcode     String          @unique
+  shortcode     String       @unique
   address       String?
-  type          String?         @default("Internal Storage")
+  type          String?      @default("Internal Storage")
   warehouseId   Int?
-  warehouse     Warehouse?      @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @updatedAt
+  warehouse     Warehouse?   @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
   products      Product[]
-  fromTransfers Transfer[]      @relation("FromLocation")
-  toTransfers   Transfer[]      @relation("ToLocation")
+  fromTransfers Transfer[]   @relation("FromLocation")
+  toTransfers   Transfer[]   @relation("ToLocation")
   adjustments   Adjustment[]
 }
 
@@ -125,13 +151,13 @@ model Product {
 }
 
 // -----------------------------------------------------------------------------
-// 4. Inventory Operations: Receipts (WH/IN)
+// Inventory Operations: Receipts (WH/IN)
 // -----------------------------------------------------------------------------
 
 model Receipt {
   id               Int           @id @default(autoincrement())
-  reference        String        @unique // WH/IN/001
-  status           String        @default("draft") // draft, in_progress, ready, done, cancelled
+  reference        String        @unique
+  status           String        @default("draft")
   scheduledDate    String?
   receiveFrom      String?
   responsible      String?       @default("Rohit Maurya")
@@ -170,13 +196,13 @@ model ReceiptItem {
 }
 
 // -----------------------------------------------------------------------------
-// 4. Inventory Operations: Deliveries (WH/OUT)
+// Inventory Operations: Deliveries (WH/OUT)
 // -----------------------------------------------------------------------------
 
 model Delivery {
   id             Int            @id @default(autoincrement())
-  reference      String         @unique // WH/OUT/001
-  status         String         @default("draft") // draft, in_progress, ready, done, cancelled
+  reference      String         @unique
+  status         String         @default("draft")
   scheduledDate  String?
   destination    String?
   responsible    String?        @default("Rohit Maurya")
@@ -217,13 +243,13 @@ model DeliveryItem {
 }
 
 // -----------------------------------------------------------------------------
-// 4. Inventory Operations: Internal Transfers / Movements
+// Inventory Operations: Internal Transfers / Movements
 // -----------------------------------------------------------------------------
 
 model Transfer {
   id             Int            @id @default(autoincrement())
-  reference      String         @unique // TRF/2026/001
-  status         String         @default("draft") // draft, done, cancelled
+  reference      String         @unique
+  status         String         @default("draft")
   scheduledDate  String?
   fromLocationId Int?
   fromLocation   Location?      @relation("FromLocation", fields: [fromLocationId], references: [id], onDelete: SetNull)
@@ -253,13 +279,13 @@ model TransferItem {
 }
 
 // -----------------------------------------------------------------------------
-// 4. Inventory Operations: Adjustments (Physical Inventory)
+// Inventory Operations: Adjustments (Physical Inventory)
 // -----------------------------------------------------------------------------
 
 model Adjustment {
   id               Int              @id @default(autoincrement())
-  reference        String           @unique // ADJ/2026/001
-  status           String           @default("draft") // draft, done, cancelled
+  reference        String           @unique
+  status           String           @default("draft")
   countedDate      String?
   locationId       Int?
   location         Location?        @relation(fields: [locationId], references: [id], onDelete: SetNull)
@@ -298,8 +324,8 @@ model AdjustmentItem {
 
 model StockMovement {
   id           Int      @id @default(autoincrement())
-  reference    String // Operation Ref (WH/IN/001, WH/OUT/001, TRF/..., ADJ/...)
-  type         String // IN, OUT, INTERNAL, ADJUSTMENT
+  reference    String
+  type         String
   productId    Int?
   product      Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
   productName  String

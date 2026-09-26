@@ -1,41 +1,37 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import { signupUser } from "../../api/auth";
+import { useNavigate } from "react-router-dom";
+import { createCompany } from "../../api/company";
 import { useAuth } from "../../context/AuthContext";
 
-const Signup = () => {
+const CreateCompany = () => {
   const navigate = useNavigate();
   const { setSession } = useAuth();
 
   const [formData, setFormData] = useState({
     name: "",
-    email: "",
-    password: "",
+    address: "",
+    phone: "",
+    gstNumber: "",
   });
-
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
   const handleChange = (e) => {
-    setFormData({
-      ...formData,
-      [e.target.name]: e.target.value,
-    });
+    setFormData({ ...formData, [e.target.name]: e.target.value });
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-
     setError("");
     setLoading(true);
 
     try {
-      const data = await signupUser(formData);
+      const data = await createCompany(formData);
       setSession(data.token, data.user);
-      navigate("/create-company");
-    } catch (error) {
+      navigate("/dashboard");
+    } catch (err) {
       setError(
-        error.response?.data?.message || "Signup failed. Please try again.",
+        err.response?.data?.message || "Failed to create company. Try again.",
       );
     } finally {
       setLoading(false);
@@ -44,10 +40,12 @@ const Signup = () => {
 
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4 py-8">
-      <div className="w-full max-w-md bg-white rounded-2xl shadow-lg p-8">
+      <div className="w-full max-w-lg bg-white rounded-2xl shadow-lg p-8">
         <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900">Create Account</h1>
-          <p className="text-gray-500 mt-2">Create your StockSense account</p>
+          <h1 className="text-3xl font-bold text-gray-900">Create Company</h1>
+          <p className="text-gray-500 mt-2">
+            Set up your company to start using StockSense. You will be the owner.
+          </p>
         </div>
 
         {error && (
@@ -59,14 +57,14 @@ const Signup = () => {
         <form onSubmit={handleSubmit} className="space-y-5">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              Name
+              Company Name
             </label>
             <input
               type="text"
               name="name"
               value={formData.name}
               onChange={handleChange}
-              placeholder="Enter your name"
+              placeholder="Acme Trading Pvt Ltd"
               required
               className="w-full rounded-lg border border-gray-300 px-4 py-3 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
             />
@@ -74,14 +72,29 @@ const Signup = () => {
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              Email
+              Address
+            </label>
+            <textarea
+              name="address"
+              value={formData.address}
+              onChange={handleChange}
+              placeholder="Street, city, state, PIN"
+              required
+              rows={3}
+              className="w-full rounded-lg border border-gray-300 px-4 py-3 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Phone Number
             </label>
             <input
-              type="email"
-              name="email"
-              value={formData.email}
+              type="tel"
+              name="phone"
+              value={formData.phone}
               onChange={handleChange}
-              placeholder="Enter your email"
+              placeholder="+91 98765 43210"
               required
               className="w-full rounded-lg border border-gray-300 px-4 py-3 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
             />
@@ -89,16 +102,15 @@ const Signup = () => {
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              Password
+              GST Number
             </label>
             <input
-              type="password"
-              name="password"
-              value={formData.password}
+              type="text"
+              name="gstNumber"
+              value={formData.gstNumber}
               onChange={handleChange}
-              placeholder="Create a password"
+              placeholder="22AAAAA0000A1Z5"
               required
-              minLength={6}
               className="w-full rounded-lg border border-gray-300 px-4 py-3 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
             />
           </div>
@@ -108,22 +120,12 @@ const Signup = () => {
             disabled={loading}
             className="w-full rounded-lg bg-blue-600 py-3 font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {loading ? "Creating account..." : "Create Account"}
+            {loading ? "Creating company..." : "Create Company"}
           </button>
         </form>
-
-        <p className="text-center text-sm text-gray-500 mt-6">
-          Already have an account?{" "}
-          <Link
-            to="/login"
-            className="font-semibold text-blue-600 hover:text-blue-700"
-          >
-            Login
-          </Link>
-        </p>
       </div>
     </div>
   );
 };
 
-export default Signup;
+export default CreateCompany;
