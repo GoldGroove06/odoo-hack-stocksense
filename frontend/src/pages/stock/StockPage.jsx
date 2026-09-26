@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Boxes,
   Search,
@@ -15,13 +15,18 @@ import {
   Sparkles,
   ArrowRight,
   TrendingUp,
-  X
+  RefreshCw,
+  X,
+  Trash2
 } from 'lucide-react';
 import Navbar from '../../components/Navbar';
+import { productApi, categoryApi, locationApi } from '../../services/api';
 import { INITIAL_STOCKS, INITIAL_LOCATIONS } from '../../data/inventoryStore';
 
 export default function StockPage() {
-  const [stocks, setStocks] = useState(INITIAL_STOCKS);
+  const [stocks, setStocks] = useState([]);
+  const [locations, setLocations] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('ALL');
   
@@ -39,7 +44,7 @@ export default function StockPage() {
     unit: 'Units',
     perUnitCost: '',
     onHand: '',
-    location: INITIAL_LOCATIONS[0].name
+    location: ''
   });
 
   const [toastMessage, setToastMessage] = useState(null);
@@ -49,6 +54,59 @@ export default function StockPage() {
     setTimeout(() => setToastMessage(null), 3500);
   };
 
+  // Fetch stocks and locations from backend API
+  const fetchStocksAndLocations = async () => {
+    setLoading(true);
+    try {
+      // 1. Fetch Products
+      try {
+        const prodRes = await productApi.getAll();
+        if (prodRes && prodRes.data && prodRes.data.length > 0) {
+          const mapped = prodRes.data.map((p) => ({
+            id: p.id,
+            name: p.name,
+            sku: p.sku,
+            category: p.category?.name || p.category || 'General',
+            unit: p.uom?.name || p.unit || 'Units',
+            perUnitCost: Number(p.perUnitCost) || 0,
+            onHand: Number(p.onHand) || 0,
+            reserved: Number(p.reserved) || 0,
+            freeToUse: Number(p.freeToUse ?? p.onHand) || 0,
+            location: p.location?.name || p.location || 'Central Stock Room',
+            minStockAlert: Number(p.minStockAlert) || 10
+          }));
+          setStocks(mapped);
+        } else {
+          setStocks(INITIAL_STOCKS);
+        }
+      } catch (err) {
+        console.warn('Backend API offline, using initial stock list:', err.message);
+        setStocks(INITIAL_STOCKS);
+      }
+
+      // 2. Fetch Locations
+      try {
+        const locRes = await locationApi.getAll();
+        if (locRes && locRes.data && locRes.data.length > 0) {
+          setLocations(locRes.data);
+          if (!newProduct.location && locRes.data.length > 0) {
+            setNewProduct((prev) => ({ ...prev, location: locRes.data[0].name }));
+          }
+        } else {
+          setLocations(INITIAL_LOCATIONS);
+        }
+      } catch (err) {
+        setLocations(INITIAL_LOCATIONS);
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchStocksAndLocations();
+  }, []);
+
   // Filter stocks
   const filteredStocks = useMemo(() => {
     return stocks.filter((item) => {
@@ -57,7 +115,11 @@ export default function StockPage() {
       }
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
-        return item.name.toLowerCase().includes(q) || item.sku.toLowerCase().includes(q) || item.location.toLowerCase().includes(q);
+        return (
+          item.name.toLowerCase().includes(q) ||
+          item.sku.toLowerCase().includes(q) ||
+          (item.location && item.location.toLowerCase().includes(q))
+        );
       }
       return true;
     });
@@ -70,13 +132,23 @@ export default function StockPage() {
     setUpdateReason('Physical Count Verification');
   };
 
-  const handleSaveStockUpdate = (e) => {
+  const handleSaveStockUpdate = async (e) => {
     e.preventDefault();
     if (!editingStock) return;
 
     const newOnHand = parseFloat(updateQuantity) || 0;
     const reserved = editingStock.reserved || 0;
     const newFreeToUse = Math.max(0, newOnHand - reserved);
+
+    // Call API if possible
+    try {
+      await productApi.update(editingStock.id, {
+        onHand: newOnHand,
+        freeToUse: newFreeToUse
+      });
+    } catch (err) {
+      console.warn('API update failed, updating local state:', err.message);
+    }
 
     const updated = stocks.map((item) => {
       if (item.id === editingStock.id) {
@@ -95,28 +167,54 @@ export default function StockPage() {
   };
 
   // Handle Add New Product
-  const handleAddNewProduct = (e) => {
+  const handleAddNewProduct = async (e) => {
     e.preventDefault();
     if (!newProduct.name.trim()) return;
 
     const onHand = parseFloat(newProduct.onHand) || 0;
     const cost = parseFloat(newProduct.perUnitCost) || 0;
+    const sku = newProduct.sku.trim() || `SKU-${Math.floor(1000 + Math.random() * 9000)}`;
 
-    const item = {
+    const payload = {
+      name: newProduct.name.trim(),
+      sku: sku,
+      perUnitCost: cost,
+      onHand: onHand,
+      freeToUse: onHand,
+      minStockAlert: 10
+    };
+
+    let newItem = {
       id: `stk-${Date.now()}`,
       name: newProduct.name.trim(),
-      sku: newProduct.sku.trim() || `SKU-${Math.floor(1000 + Math.random() * 9000)}`,
+      sku: sku,
       category: newProduct.category,
       unit: newProduct.unit,
       perUnitCost: cost,
       onHand: onHand,
       reserved: 0,
       freeToUse: onHand,
-      location: newProduct.location,
+      location: newProduct.location || (locations[0]?.name || 'Central WH'),
       minStockAlert: 10
     };
 
-    setStocks([item, ...stocks]);
+    try {
+      const res = await productApi.create(payload);
+      if (res && res.data) {
+        newItem = {
+          ...newItem,
+          id: res.data.id,
+          sku: res.data.sku,
+          category: res.data.category?.name || newProduct.category,
+          unit: res.data.uom?.name || newProduct.unit,
+          location: res.data.location?.name || newProduct.location
+        };
+      }
+    } catch (err) {
+      console.warn('API create fallback to local state:', err.message);
+    }
+
+    setStocks([newItem, ...stocks]);
     setIsAddModalOpen(false);
     setNewProduct({
       name: '',
@@ -125,9 +223,30 @@ export default function StockPage() {
       unit: 'Units',
       perUnitCost: '',
       onHand: '',
-      location: INITIAL_LOCATIONS[0].name
+      location: locations[0]?.name || INITIAL_LOCATIONS[0].name
     });
-    showToast(`Added new stock item "${item.name}"`);
+    showToast(`Added new stock item "${newItem.name}"`);
+  };
+
+  // Delete Stock Item
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [stockToDelete, setStockToDelete] = useState(null);
+
+  const handleDeleteStock = async () => {
+    if (!stockToDelete) return;
+    try {
+      try {
+        await productApi.delete(stockToDelete.id);
+      } catch (err) {
+        console.warn('API delete stock product fallback to local:', err.message);
+      }
+      setStocks(stocks.filter((s) => s.id !== stockToDelete.id));
+      showToast(`Stock item "${stockToDelete.name}" deleted successfully!`);
+      setIsDeleteModalOpen(false);
+      setStockToDelete(null);
+    } catch (err) {
+      showToast(err.message || 'Failed to delete stock product', 'error');
+    }
   };
 
   const categories = ['ALL', ...Array.from(new Set(stocks.map((s) => s.category)))];
@@ -170,14 +289,24 @@ export default function StockPage() {
             </p>
           </div>
 
-          <button
-            type="button"
-            onClick={() => setIsAddModalOpen(true)}
-            className="px-4 py-2 text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 active:scale-98 rounded-xl shadow-xs transition-all flex items-center gap-2 cursor-pointer self-start sm:self-auto"
-          >
-            <Plus className="w-4 h-4" />
-            Add Stock Product
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={fetchStocksAndLocations}
+              title="Refresh from API"
+              className="p-2 text-slate-600 bg-white hover:bg-slate-100 border border-slate-200 rounded-xl transition-colors cursor-pointer"
+            >
+              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-indigo-600' : ''}`} />
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsAddModalOpen(true)}
+              className="px-4 py-2 text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 active:scale-98 rounded-xl shadow-xs transition-all flex items-center gap-2 cursor-pointer self-start sm:self-auto"
+            >
+              <Plus className="w-4 h-4" />
+              Add Stock Product
+            </button>
+          </div>
         </div>
 
         {/* Quick KPI Cards */}
@@ -255,7 +384,7 @@ export default function StockPage() {
                   <th className="py-3.5 px-4 w-32 text-right font-bold text-slate-800">On Hand</th>
                   <th className="py-3.5 px-4 w-32 text-right font-bold text-emerald-700">Free to Use</th>
                   <th className="py-3.5 px-4 min-w-[180px]">Location</th>
-                  <th className="py-3.5 px-4 w-28 text-center">Update Stock</th>
+                  <th className="py-3.5 px-4 w-36 text-center">Actions</th>
                 </tr>
               </thead>
 
@@ -325,17 +454,30 @@ export default function StockPage() {
                           </span>
                         </td>
 
-                        {/* Action: Update Stock */}
+                        {/* Actions: Update Stock & Delete */}
                         <td className="py-3.5 px-4 text-center">
-                          <button
-                            type="button"
-                            onClick={() => handleOpenUpdateModal(stk)}
-                            className="px-3 py-1.5 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg transition-colors flex items-center gap-1 mx-auto cursor-pointer"
-                            title="Update stock count"
-                          >
-                            <Edit3 className="w-3.5 h-3.5" />
-                            Update
-                          </button>
+                          <div className="flex items-center justify-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => handleOpenUpdateModal(stk)}
+                              className="px-2.5 py-1 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg transition-colors flex items-center gap-1 cursor-pointer"
+                              title="Update stock count"
+                            >
+                              <Edit3 className="w-3.5 h-3.5" />
+                              Update
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setStockToDelete(stk);
+                                setIsDeleteModalOpen(true);
+                              }}
+                              className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                              title="Delete Product"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     );
@@ -347,7 +489,7 @@ export default function StockPage() {
 
           <div className="p-4 bg-slate-50 border-t border-slate-200 text-xs text-slate-500 flex justify-between items-center">
             <span>Showing <strong>{filteredStocks.length}</strong> items in inventory</span>
-            <span>Click <strong>"Update"</strong> on any row to modify on-hand stock quantities</span>
+            <span>Click <strong>"Update"</strong> to change on-hand quantities or <strong>"Trash"</strong> to remove items.</span>
           </div>
         </div>
 
@@ -586,6 +728,42 @@ export default function StockPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* DELETE STOCK MODAL */}
+      {isDeleteModalOpen && stockToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-xs p-4 animate-in fade-in duration-150">
+          <div className="bg-white w-full max-w-md rounded-2xl shadow-xl border border-slate-200 p-6 space-y-4">
+            <div className="w-10 h-10 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center font-bold">
+              <Trash2 className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-slate-900">Delete Stock Item?</h3>
+              <p className="text-xs text-slate-500 mt-1">
+                Are you sure you want to delete <strong className="text-slate-800 font-semibold">{stockToDelete.name}</strong> ({stockToDelete.sku}) from inventory? This action cannot be undone.
+              </p>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsDeleteModalOpen(false);
+                  setStockToDelete(null);
+                }}
+                className="px-4 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteStock}
+                className="px-4 py-2 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-lg shadow-xs cursor-pointer"
+              >
+                Confirm Delete
+              </button>
+            </div>
           </div>
         </div>
       )}
