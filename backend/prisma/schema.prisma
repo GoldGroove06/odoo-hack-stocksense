@@ -13,6 +13,16 @@ enum Role {
   WAREHOUSE_STAFF
 }
 
+enum ProductKind {
+  TRADING
+  MANUFACTURING
+}
+
+enum MaterialType {
+  RAW_MATERIAL
+  FINISHED_GOODS
+}
+
 model Company {
   id        Int      @id @default(autoincrement())
   name      String
@@ -36,6 +46,8 @@ model User {
   createdAt         DateTime           @default(now())
   updatedAt         DateTime           @updatedAt
   passwordResetOtps PasswordResetOtp[]
+  transfersStaff    Transfer[]         @relation("TransferStaff")
+  stockMovements    StockMovement[]
 }
 
 model PasswordResetOtp {
@@ -85,19 +97,24 @@ model Warehouse {
 }
 
 model Location {
-  id            Int          @id @default(autoincrement())
-  name          String
-  shortcode     String       @unique
-  address       String?
-  type          String?      @default("Internal Storage")
-  warehouseId   Int?
-  warehouse     Warehouse?   @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
-  createdAt     DateTime     @default(now())
-  updatedAt     DateTime     @updatedAt
-  products      Product[]
-  fromTransfers Transfer[]   @relation("FromLocation")
-  toTransfers   Transfer[]   @relation("ToLocation")
-  adjustments   Adjustment[]
+  id                 Int            @id @default(autoincrement())
+  name               String
+  shortcode          String         @unique
+  address            String?
+  type               String?        @default("Internal Storage")
+  warehouseId        Int?
+  warehouse          Warehouse?     @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+  products           Product[]
+  stockQuants        StockQuant[]
+  fromTransfers      Transfer[]     @relation("FromLocation")
+  toTransfers        Transfer[]     @relation("ToLocation")
+  adjustments        Adjustment[]
+  receiptDestinations Receipt[]     @relation("ReceiptDestination")
+  deliverySources    Delivery[]     @relation("DeliverySource")
+  movementsFrom      StockMovement[] @relation("MovementFrom")
+  movementsTo        StockMovement[] @relation("MovementTo")
 }
 
 model Supplier {
@@ -135,6 +152,8 @@ model Product {
   onHand          Float            @default(0.0)
   freeToUse       Float            @default(0.0)
   minStockAlert   Float            @default(10.0)
+  productKind     ProductKind      @default(TRADING)
+  materialType    MaterialType     @default(FINISHED_GOODS)
   categoryId      Int?
   category        Category?        @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   uomId           Int?
@@ -148,6 +167,33 @@ model Product {
   transferItems   TransferItem[]
   adjustmentItems AdjustmentItem[]
   movements       StockMovement[]
+  stockQuants     StockQuant[]
+  bomAsParent     BomLine[]        @relation("BomParent")
+  bomAsComponent  BomLine[]        @relation("BomComponent")
+}
+
+model BomLine {
+  id                 Int     @id @default(autoincrement())
+  parentProductId    Int
+  parentProduct      Product @relation("BomParent", fields: [parentProductId], references: [id], onDelete: Cascade)
+  componentProductId Int
+  componentProduct   Product @relation("BomComponent", fields: [componentProductId], references: [id], onDelete: Cascade)
+  quantity           Float   @default(1.0)
+
+  @@unique([parentProductId, componentProductId])
+}
+
+model StockQuant {
+  id          Int      @id @default(autoincrement())
+  productId   Int
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  locationId  Int
+  location    Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  quantity    Float    @default(0.0)
+  reservedQty Float    @default(0.0)
+  updatedAt   DateTime @updatedAt
+
+  @@unique([productId, locationId])
 }
 
 // -----------------------------------------------------------------------------
@@ -155,27 +201,30 @@ model Product {
 // -----------------------------------------------------------------------------
 
 model Receipt {
-  id               Int           @id @default(autoincrement())
-  reference        String        @unique
-  status           String        @default("draft")
-  scheduledDate    String?
-  receiveFrom      String?
-  responsible      String?       @default("Rohit Maurya")
-  sellerBillNumber String?
-  sourceDocument   String?
-  internalNotes    String?
-  subtotal         Float         @default(0.0)
-  taxRate          Float         @default(18.0)
-  taxAmount        Float         @default(0.0)
-  totalAmount      Float         @default(0.0)
-  supplierId       Int?
-  supplier         Supplier?     @relation(fields: [supplierId], references: [id], onDelete: SetNull)
-  warehouseId      Int?
-  warehouse        Warehouse?    @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
-  moNumber         String?
-  createdAt        DateTime      @default(now())
-  updatedAt        DateTime      @updatedAt
-  items            ReceiptItem[]
+  id                   Int           @id @default(autoincrement())
+  reference            String        @unique
+  status               String        @default("draft")
+  scheduledDate        String?
+  receiveFrom          String?
+  responsible          String?       @default("Rohit Maurya")
+  sellerBillNumber     String?
+  sourceDocument       String?
+  internalNotes        String?
+  subtotal             Float         @default(0.0)
+  taxRate              Float         @default(18.0)
+  taxAmount            Float         @default(0.0)
+  totalAmount          Float         @default(0.0)
+  supplierId           Int?
+  supplier             Supplier?     @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  warehouseId          Int?
+  warehouse            Warehouse?    @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+  destinationLocationId Int?
+  destinationLocation  Location?     @relation("ReceiptDestination", fields: [destinationLocationId], references: [id], onDelete: SetNull)
+  moNumber             String?
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+  items                ReceiptItem[]
+  transfers            Transfer[]
 }
 
 model ReceiptItem {
@@ -200,29 +249,32 @@ model ReceiptItem {
 // -----------------------------------------------------------------------------
 
 model Delivery {
-  id             Int            @id @default(autoincrement())
-  reference      String         @unique
-  status         String         @default("draft")
-  scheduledDate  String?
-  destination    String?
-  responsible    String?        @default("Rohit Maurya")
-  carrier        String?        @default("Internal Logistics")
-  trackingNumber String?
-  vehicleNumber  String?
-  sourceDocument String?
-  customerNotes  String?
-  subtotal       Float          @default(0.0)
-  taxRate        Float          @default(18.0)
-  taxAmount      Float          @default(0.0)
-  totalAmount    Float          @default(0.0)
-  customerId     Int?
-  customer       Customer?      @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  warehouseId    Int?
-  warehouse      Warehouse?     @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
-  moNumber       String?
-  createdAt      DateTime       @default(now())
-  updatedAt      DateTime       @updatedAt
-  items          DeliveryItem[]
+  id               Int            @id @default(autoincrement())
+  reference        String         @unique
+  status           String         @default("draft")
+  scheduledDate    String?
+  destination      String?
+  responsible      String?        @default("Rohit Maurya")
+  carrier          String?        @default("Internal Logistics")
+  trackingNumber   String?
+  vehicleNumber    String?
+  sourceDocument   String?
+  customerNotes    String?
+  subtotal         Float          @default(0.0)
+  taxRate          Float          @default(18.0)
+  taxAmount        Float          @default(0.0)
+  totalAmount      Float          @default(0.0)
+  customerId       Int?
+  customer         Customer?      @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  warehouseId      Int?
+  warehouse        Warehouse?     @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+  sourceLocationId Int?
+  sourceLocation   Location?      @relation("DeliverySource", fields: [sourceLocationId], references: [id], onDelete: SetNull)
+  moNumber         String?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  items            DeliveryItem[]
+  transfers        Transfer[]
 }
 
 model DeliveryItem {
@@ -259,23 +311,33 @@ model Transfer {
   isManufactured Boolean        @default(false)
   moNumber       String?
   responsible    String?        @default("Rohit Maurya")
+  receiptId      Int?
+  receipt        Receipt?       @relation(fields: [receiptId], references: [id], onDelete: SetNull)
+  deliveryId     Int?
+  delivery       Delivery?      @relation(fields: [deliveryId], references: [id], onDelete: SetNull)
+  staffUserId    Int?
+  staffUser      User?          @relation("TransferStaff", fields: [staffUserId], references: [id], onDelete: SetNull)
+  pickedAt       DateTime?
+  droppedAt      DateTime?
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
   items          TransferItem[]
 }
 
 model TransferItem {
-  id         Int      @id @default(autoincrement())
-  transferId Int
-  transfer   Transfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
-  productId  Int?
-  product    Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
-  name       String
-  sku        String?
-  quantity   Float    @default(1.0)
-  unit       String   @default("Units")
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id             Int      @id @default(autoincrement())
+  transferId     Int
+  transfer       Transfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  productId      Int?
+  product        Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  name           String
+  sku            String?
+  quantity       Float    @default(1.0)
+  pickedQty      Float    @default(0.0)
+  transferredQty Float    @default(0.0)
+  unit           String   @default("Units")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 }
 
 // -----------------------------------------------------------------------------
@@ -323,19 +385,27 @@ model AdjustmentItem {
 // -----------------------------------------------------------------------------
 
 model StockMovement {
-  id           Int      @id @default(autoincrement())
-  reference    String
-  type         String
-  productId    Int?
-  product      Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
-  productName  String
-  sku          String?
-  fromLocation String?
-  toLocation   String?
-  quantity     Float
-  unit         String   @default("Units")
-  balanceAfter Float?
-  reason       String?
-  responsible  String?  @default("Rohit Maurya")
-  createdAt    DateTime @default(now())
+  id             Int       @id @default(autoincrement())
+  reference      String
+  type           String
+  productId      Int?
+  product        Product?  @relation(fields: [productId], references: [id], onDelete: SetNull)
+  productName    String
+  sku            String?
+  fromLocation   String?
+  toLocation     String?
+  fromLocationId Int?
+  fromLoc        Location? @relation("MovementFrom", fields: [fromLocationId], references: [id], onDelete: SetNull)
+  toLocationId   Int?
+  toLoc          Location? @relation("MovementTo", fields: [toLocationId], references: [id], onDelete: SetNull)
+  quantity       Float
+  unit           String    @default("Units")
+  balanceAfter   Float?
+  reason         String?
+  responsible    String?   @default("Rohit Maurya")
+  userId         Int?
+  user           User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  documentType   String?
+  documentId     Int?
+  createdAt      DateTime  @default(now())
 }

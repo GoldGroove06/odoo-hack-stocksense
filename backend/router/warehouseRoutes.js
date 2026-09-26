@@ -1,4 +1,5 @@
 import express from "express";
+import { protect, authorize } from "../middlewares/authMiddleware.js";
 import {
   listWarehouses,
   getWarehouseById,
@@ -8,6 +9,9 @@ import {
 } from "../controllers/warehouseController.js";
 
 const router = express.Router();
+
+router.use(protect);
+
 
 // GET /warehouses - List warehouses
 // POST /warehouses - Create warehouse

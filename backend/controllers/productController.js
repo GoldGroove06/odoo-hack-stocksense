@@ -69,15 +69,31 @@ export const listProducts = async (req, res) => {
               shortcode: true,
               warehouse: { select: { id: true, name: true, shortcode: true } }
             }
+          },
+          stockQuants: {
+            select: { id: true, quantity: true, reservedQty: true, locationId: true, location: { select: { id: true, name: true, shortcode: true } } }
+          },
+          bomAsParent: {
+            include: {
+              componentProduct: { select: { id: true, name: true, sku: true } }
+            }
           }
         }
       }),
       prisma.product.count({ where })
     ]);
 
+    const enriched = products.map((p) => ({
+      ...p,
+      stockQuants: (p.stockQuants || []).map((q) => ({
+        ...q,
+        freeQty: Math.max(0, (q.quantity || 0) - (q.reservedQty || 0))
+      }))
+    }));
+
     return res.status(200).json({
       success: true,
-      data: products,
+      data: enriched,
       pagination: {
         total,
         page: parseInt(page),
@@ -112,6 +128,12 @@ export const getProductById = async (req, res) => {
           include: {
             warehouse: true
           }
+        },
+        stockQuants: { include: { location: true } },
+        bomAsParent: {
+          include: {
+            componentProduct: { select: { id: true, name: true, sku: true, materialType: true } }
+          }
         }
       }
     });
@@ -125,7 +147,13 @@ export const getProductById = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      data: product
+      data: {
+        ...product,
+        stockQuants: (product.stockQuants || []).map((q) => ({
+          ...q,
+          freeQty: Math.max(0, (q.quantity || 0) - (q.reservedQty || 0))
+        }))
+      }
     });
   } catch (error) {
     console.error("Error fetching product:", error);
@@ -153,7 +181,10 @@ export const createProduct = async (req, res) => {
       minStockAlert = 10.0,
       categoryId,
       uomId,
-      locationId
+      locationId,
+      productKind = "TRADING",
+      materialType = "FINISHED_GOODS",
+      bomLines = []
     } = req.body;
 
     if (!name || !sku) {
@@ -175,26 +206,55 @@ export const createProduct = async (req, res) => {
       });
     }
 
-    const calculatedFreeToUse = freeToUse !== undefined ? parseFloat(freeToUse) : parseFloat(onHand);
+    const initialQty = parseFloat(onHand) || 0;
+    const calculatedFreeToUse = freeToUse !== undefined ? parseFloat(freeToUse) : initialQty;
 
-    const product = await prisma.product.create({
-      data: {
-        name: name.trim(),
-        sku: sku.trim(),
-        description: description ? description.trim() : null,
-        perUnitCost: parseFloat(perUnitCost) || 0.0,
-        onHand: parseFloat(onHand) || 0.0,
-        freeToUse: calculatedFreeToUse,
-        minStockAlert: parseFloat(minStockAlert) || 10.0,
-        categoryId: categoryId ? parseInt(categoryId) : null,
-        uomId: uomId ? parseInt(uomId) : null,
-        locationId: locationId ? parseInt(locationId) : null
-      },
-      include: {
-        category: true,
-        uom: true,
-        location: true
+    const product = await prisma.$transaction(async (tx) => {
+      const created = await tx.product.create({
+        data: {
+          name: name.trim(),
+          sku: sku.trim(),
+          description: description ? description.trim() : null,
+          perUnitCost: parseFloat(perUnitCost) || 0.0,
+          onHand: initialQty,
+          freeToUse: calculatedFreeToUse,
+          minStockAlert: parseFloat(minStockAlert) || 10.0,
+          productKind: productKind === "MANUFACTURING" ? "MANUFACTURING" : "TRADING",
+          materialType: materialType === "RAW_MATERIAL" ? "RAW_MATERIAL" : "FINISHED_GOODS",
+          categoryId: categoryId ? parseInt(categoryId) : null,
+          uomId: uomId ? parseInt(uomId) : null,
+          locationId: locationId ? parseInt(locationId) : null,
+          bomAsParent: Array.isArray(bomLines) && bomLines.length
+            ? {
+                create: bomLines
+                  .filter((l) => l.componentProductId)
+                  .map((l) => ({
+                    componentProductId: Number(l.componentProductId),
+                    quantity: Number(l.quantity) || 1
+                  }))
+              }
+            : undefined
+        },
+        include: {
+          category: true,
+          uom: true,
+          location: true,
+          bomAsParent: { include: { componentProduct: true } }
+        }
+      });
+
+      if (locationId && initialQty > 0) {
+        await tx.stockQuant.create({
+          data: {
+            productId: created.id,
+            locationId: parseInt(locationId),
+            quantity: initialQty,
+            reservedQty: 0
+          }
+        });
       }
+
+      return created;
     });
 
     return res.status(201).json({
@@ -229,7 +289,10 @@ export const updateProduct = async (req, res) => {
       minStockAlert,
       categoryId,
       uomId,
-      locationId
+      locationId,
+      productKind,
+      materialType,
+      bomLines
     } = req.body;
 
     const existingProduct = await prisma.product.findUnique({
@@ -267,15 +330,41 @@ export const updateProduct = async (req, res) => {
     if (categoryId !== undefined) updateData.categoryId = categoryId ? parseInt(categoryId) : null;
     if (uomId !== undefined) updateData.uomId = uomId ? parseInt(uomId) : null;
     if (locationId !== undefined) updateData.locationId = locationId ? parseInt(locationId) : null;
+    if (productKind !== undefined) {
+      updateData.productKind = productKind === "MANUFACTURING" ? "MANUFACTURING" : "TRADING";
+    }
+    if (materialType !== undefined) {
+      updateData.materialType =
+        materialType === "RAW_MATERIAL" ? "RAW_MATERIAL" : "FINISHED_GOODS";
+    }
 
-    const updatedProduct = await prisma.product.update({
-      where: { id: parseInt(id) },
-      data: updateData,
-      include: {
-        category: true,
-        uom: true,
-        location: true
+    const updatedProduct = await prisma.$transaction(async (tx) => {
+      if (Array.isArray(bomLines)) {
+        await tx.bomLine.deleteMany({ where: { parentProductId: parseInt(id) } });
+        if (bomLines.length) {
+          await tx.bomLine.createMany({
+            data: bomLines
+              .filter((l) => l.componentProductId)
+              .map((l) => ({
+                parentProductId: parseInt(id),
+                componentProductId: Number(l.componentProductId),
+                quantity: Number(l.quantity) || 1
+              }))
+          });
+        }
       }
+
+      return tx.product.update({
+        where: { id: parseInt(id) },
+        data: updateData,
+        include: {
+          category: true,
+          uom: true,
+          location: true,
+          bomAsParent: { include: { componentProduct: true } },
+          stockQuants: { include: { location: true } }
+        }
+      });
     });
 
     return res.status(200).json({

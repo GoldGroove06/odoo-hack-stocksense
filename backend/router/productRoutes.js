@@ -6,21 +6,20 @@ import {
   updateProduct,
   deleteProduct
 } from "../controllers/productController.js";
+import { protect, authorize } from "../middlewares/authMiddleware.js";
 
 const router = express.Router();
+const managers = authorize("OWNER", "INVENTORY_MANAGER");
 
-// GET /products - List & search products
-// POST /products - Create product
+router.use(protect);
+
 router.route("/")
   .get(listProducts)
-  .post(createProduct);
+  .post(managers, createProduct);
 
-// GET /products/:id - Get product details
-// PATCH /products/:id - Update product
-// DELETE /products/:id - Delete product
 router.route("/:id")
   .get(getProductById)
-  .patch(updateProduct)
-  .delete(deleteProduct);
+  .patch(managers, updateProduct)
+  .delete(managers, deleteProduct);
 
 export default router;

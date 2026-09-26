@@ -1,4 +1,5 @@
 import express from "express";
+import { protect, authorize } from "../middlewares/authMiddleware.js";
 import {
   getAllCustomers,
   createCustomer,
@@ -6,6 +7,9 @@ import {
 } from "../controllers/customerController.js";
 
 const router = express.Router();
+
+router.use(protect);
+
 
 router.get("/", getAllCustomers);
 router.post("/", createCustomer);

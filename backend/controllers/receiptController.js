@@ -1,4 +1,5 @@
 import prisma from "../config/prisma.js";
+import { applyIn, withStockTransaction } from "../services/stockService.js";
 
 // Helper to generate reference: <Warehouse>/IN/<PaddedID> (e.g. WH/IN/001)
 async function generateReceiptReference(warehouseId) {
@@ -44,6 +45,7 @@ export const getAllReceipts = async (req, res) => {
       include: {
         supplier: true,
         warehouse: true,
+        destinationLocation: true,
         items: {
           include: {
             product: true
@@ -73,6 +75,7 @@ export const getReceiptById = async (req, res) => {
       include: {
         supplier: true,
         warehouse: true,
+        destinationLocation: true,
         items: {
           include: {
             product: true
@@ -110,6 +113,7 @@ export const createReceipt = async (req, res) => {
       totalAmount = 0,
       supplierId,
       warehouseId,
+      destinationLocationId,
       moNumber,
       items = []
     } = req.body;
@@ -154,6 +158,7 @@ export const createReceipt = async (req, res) => {
         totalAmount: finalTotal,
         supplierId: supplierId ? Number(supplierId) : null,
         warehouseId: warehouseId ? Number(warehouseId) : null,
+        destinationLocationId: destinationLocationId ? Number(destinationLocationId) : null,
         moNumber,
         items: {
           create: itemsData
@@ -162,6 +167,7 @@ export const createReceipt = async (req, res) => {
       include: {
         supplier: true,
         warehouse: true,
+        destinationLocation: true,
         items: true
       }
     });
@@ -195,6 +201,7 @@ export const updateReceipt = async (req, res) => {
       totalAmount,
       supplierId,
       warehouseId,
+      destinationLocationId,
       moNumber,
       items
     } = req.body;
@@ -222,7 +229,17 @@ export const updateReceipt = async (req, res) => {
     if (totalAmount !== undefined) updateData.totalAmount = Number(totalAmount);
     if (supplierId !== undefined) updateData.supplierId = supplierId ? Number(supplierId) : null;
     if (warehouseId !== undefined) updateData.warehouseId = warehouseId ? Number(warehouseId) : null;
+    if (destinationLocationId !== undefined) {
+      updateData.destinationLocationId = destinationLocationId ? Number(destinationLocationId) : null;
+    }
     if (moNumber !== undefined) updateData.moNumber = moNumber;
+    // Status to done must go through validate endpoint (stock side effects)
+    if (status === "done") {
+      return res.status(400).json({
+        success: false,
+        message: "Use POST /receipts/:id/validate to complete a receipt"
+      });
+    }
 
     if (Array.isArray(items)) {
       await prisma.receiptItem.deleteMany({ where: { receiptId: Number(id) } });
@@ -282,121 +299,113 @@ export const deleteReceipt = async (req, res) => {
   }
 };
 
-// POST /receipts/:id/validate (Validate and increase stock)
+// POST /receipts/:id/validate (Validate and increase stock at destination location)
 export const validateReceipt = async (req, res) => {
   try {
     const { id } = req.params;
-    const receipt = await prisma.receipt.findUnique({
-      where: { id: Number(id) },
-      include: {
-        items: true,
-        warehouse: true,
-        supplier: true
-      }
-    });
+    const userId = req.user?.userId ? Number(req.user.userId) : null;
 
-    if (!receipt) {
-      return res.status(404).json({ success: false, message: "Receipt not found" });
-    }
-
-    if (receipt.status === "done") {
-      return res.status(400).json({ success: false, message: "Receipt is already validated and completed" });
-    }
-
-    const movementsToCreate = [];
-
-    for (const item of receipt.items) {
-      const qty = Number(item.quantity) || 0;
-
-      if (item.productId) {
-        const product = await prisma.product.findUnique({ where: { id: item.productId } });
-        if (product) {
-          const newOnHand = product.onHand + qty;
-          const newFree = product.freeToUse + qty;
-
-          await prisma.product.update({
-            where: { id: product.id },
-            data: {
-              onHand: newOnHand,
-              freeToUse: newFree
-            }
-          });
-
-          movementsToCreate.push({
-            reference: receipt.reference,
-            type: "IN",
-            productId: product.id,
-            productName: product.name,
-            sku: product.sku,
-            fromLocation: receipt.supplier?.name || receipt.receiveFrom || "Vendor / Supplier",
-            toLocation: receipt.warehouse?.name || "Central Stock Room",
-            quantity: qty,
-            unit: item.unit || "Units",
-            balanceAfter: newOnHand,
-            reason: `Receipt Validation (${receipt.reference})`,
-            responsible: receipt.responsible || "Rohit Maurya"
-          });
+    const updatedReceipt = await withStockTransaction(async (tx) => {
+      const receipt = await tx.receipt.findUnique({
+        where: { id: Number(id) },
+        include: {
+          items: true,
+          warehouse: true,
+          supplier: true,
+          destinationLocation: true
         }
-      } else if (item.sku) {
-        const product = await prisma.product.findUnique({ where: { sku: item.sku } });
-        if (product) {
-          const newOnHand = product.onHand + qty;
-          const newFree = product.freeToUse + qty;
+      });
 
-          await prisma.product.update({
-            where: { id: product.id },
-            data: {
-              onHand: newOnHand,
-              freeToUse: newFree
-            }
-          });
+      if (!receipt) {
+        const err = new Error("Receipt not found");
+        err.status = 404;
+        throw err;
+      }
+      if (receipt.status === "done") {
+        const err = new Error("Receipt is already validated and completed");
+        err.status = 400;
+        throw err;
+      }
 
-          movementsToCreate.push({
-            reference: receipt.reference,
-            type: "IN",
-            productId: product.id,
-            productName: product.name,
-            sku: product.sku,
-            fromLocation: receipt.supplier?.name || receipt.receiveFrom || "Vendor / Supplier",
-            toLocation: receipt.warehouse?.name || "Central Stock Room",
-            quantity: qty,
-            unit: item.unit || "Units",
-            balanceAfter: newOnHand,
-            reason: `Receipt Validation (${receipt.reference})`,
-            responsible: receipt.responsible || "Rohit Maurya"
-          });
+      let locationId = receipt.destinationLocationId;
+      if (!locationId && receipt.warehouseId) {
+        const receiving = await tx.location.findFirst({
+          where: {
+            warehouseId: receipt.warehouseId,
+            OR: [
+              { type: { contains: "Incoming", mode: "insensitive" } },
+              { shortcode: { contains: "DOCK", mode: "insensitive" } }
+            ]
+          }
+        });
+        locationId = receiving?.id || (
+          await tx.location.findFirst({ where: { warehouseId: receipt.warehouseId } })
+        )?.id;
+      }
+      if (!locationId) {
+        const err = new Error("Receipt needs a destinationLocationId (or warehouse with locations)");
+        err.status = 400;
+        throw err;
+      }
+
+      for (const item of receipt.items) {
+        const qty = Number(item.quantity) || 0;
+        if (qty <= 0) continue;
+
+        let productId = item.productId;
+        if (!productId && item.sku) {
+          const bySku = await tx.product.findUnique({ where: { sku: item.sku } });
+          productId = bySku?.id || null;
         }
+        if (!productId) continue;
+
+        await applyIn(tx, {
+          productId,
+          locationId,
+          qty,
+          unit: item.unit || "Units",
+          productName: item.name,
+          sku: item.sku,
+          fromLocation: receipt.supplier?.name || receipt.receiveFrom || "Vendor",
+          reason: `Receipt Validation (${receipt.reference})`,
+          responsible: receipt.responsible,
+          userId,
+          documentType: "RECEIPT",
+          documentId: receipt.id,
+          reference: receipt.reference
+        });
+
+        await tx.receiptItem.update({
+          where: { id: item.id },
+          data: { receivedQty: qty, productId }
+        });
       }
 
-      await prisma.receiptItem.update({
-        where: { id: item.id },
-        data: { receivedQty: qty }
+      return tx.receipt.update({
+        where: { id: Number(id) },
+        data: {
+          status: "done",
+          destinationLocationId: locationId
+        },
+        include: {
+          supplier: true,
+          warehouse: true,
+          destinationLocation: true,
+          items: { include: { product: true } }
+        }
       });
-    }
-
-    if (movementsToCreate.length > 0) {
-      await prisma.stockMovement.createMany({
-        data: movementsToCreate
-      });
-    }
-
-    const updatedReceipt = await prisma.receipt.update({
-      where: { id: Number(id) },
-      data: { status: "done" },
-      include: {
-        supplier: true,
-        warehouse: true,
-        items: true
-      }
     });
 
     res.status(200).json({
       success: true,
-      message: `Receipt ${receipt.reference} validated successfully. Stock increased and ledger updated.`,
+      message: `Receipt ${updatedReceipt.reference} validated successfully. Stock increased.`,
       data: updatedReceipt
     });
   } catch (error) {
     console.error("Error validating receipt:", error);
-    res.status(500).json({ success: false, message: "Failed to validate receipt", error: error.message });
+    res.status(error.status || 500).json({
+      success: false,
+      message: error.message || "Failed to validate receipt"
+    });
   }
 };

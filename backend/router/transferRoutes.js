@@ -5,16 +5,25 @@ import {
   getTransferById,
   updateTransfer,
   deleteTransfer,
-  validateTransfer
+  validateTransfer,
+  pickTransfer,
+  dropTransfer
 } from "../controllers/transferController.js";
+import { protect, authorize } from "../middlewares/authMiddleware.js";
 
 const router = express.Router();
+const managers = authorize("OWNER", "INVENTORY_MANAGER");
+const staffOrManagers = authorize("OWNER", "INVENTORY_MANAGER", "WAREHOUSE_STAFF");
 
-router.get("/", getAllTransfers);
-router.post("/", createTransfer);
-router.get("/:id", getTransferById);
-router.patch("/:id", updateTransfer);
-router.delete("/:id", deleteTransfer);
-router.post("/:id/validate", validateTransfer);
+router.use(protect);
+
+router.get("/", staffOrManagers, getAllTransfers);
+router.get("/:id", staffOrManagers, getTransferById);
+router.post("/", managers, createTransfer);
+router.patch("/:id", managers, updateTransfer);
+router.delete("/:id", managers, deleteTransfer);
+router.post("/:id/pick", staffOrManagers, pickTransfer);
+router.post("/:id/drop", staffOrManagers, dropTransfer);
+router.post("/:id/validate", managers, validateTransfer);
 
 export default router;

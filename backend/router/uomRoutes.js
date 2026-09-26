@@ -1,4 +1,5 @@
 import express from "express";
+import { protect, authorize } from "../middlewares/authMiddleware.js";
 import {
   listUoms,
   getUomById,
@@ -8,6 +9,9 @@ import {
 } from "../controllers/uomController.js";
 
 const router = express.Router();
+
+router.use(protect);
+
 
 // GET /uoms - List units of measure
 // POST /uoms - Create unit of measure

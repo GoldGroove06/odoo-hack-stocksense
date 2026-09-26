@@ -1,6 +1,13 @@
 import prisma from "../config/prisma.js";
+import {
+  assertAvailable,
+  applyOutReserved,
+  getQuantQuantity,
+  releaseReservation,
+  reserveStock,
+  withStockTransaction
+} from "../services/stockService.js";
 
-// Helper to generate reference: <Warehouse>/OUT/<PaddedID> (e.g. WH/OUT/001)
 async function generateDeliveryReference(warehouseId) {
   let whCode = "WH";
   if (warehouseId) {
@@ -12,21 +19,81 @@ async function generateDeliveryReference(warehouseId) {
   return `${whCode}/OUT/${nextId}`;
 }
 
-// GET /deliveries
+const deliveryInclude = {
+  customer: true,
+  warehouse: true,
+  sourceLocation: true,
+  items: {
+    include: {
+      product: {
+        include: {
+          stockQuants: true
+        }
+      }
+    }
+  },
+  transfers: true
+};
+
+async function resolveSourceLocationId(txOrPrisma, delivery) {
+  let locationId = delivery.sourceLocationId;
+  if (!locationId && delivery.warehouseId) {
+    const loc = await txOrPrisma.location.findFirst({
+      where: { warehouseId: delivery.warehouseId }
+    });
+    locationId = loc?.id || null;
+  }
+  return locationId;
+}
+
+/** Fail early if any line exceeds free qty at source location */
+async function assertItemsAvailable(tx, items, locationId) {
+  if (!locationId) {
+    const err = new Error("Delivery needs a sourceLocationId before checking stock");
+    err.status = 400;
+    throw err;
+  }
+  // Aggregate demand per product (multiple lines of same SKU)
+  const demand = new Map();
+  for (const item of items) {
+    const productId = item.productId ? Number(item.productId) : null;
+    const qty = Number(item.quantity) || 0;
+    if (!productId || qty <= 0) continue;
+    demand.set(productId, (demand.get(productId) || 0) + qty);
+  }
+  for (const [productId, qty] of demand) {
+    await assertAvailable(tx, productId, locationId, qty);
+  }
+}
+
+function enrichDeliveryAvailability(delivery) {
+  if (!delivery) return delivery;
+  const locationId = delivery.sourceLocationId;
+  const items = (delivery.items || []).map((item) => {
+    const quants = item.product?.stockQuants || [];
+    const atSource = locationId
+      ? quants.find((q) => q.locationId === locationId)
+      : null;
+    const quantity = atSource?.quantity ?? 0;
+    const reservedQty = atSource?.reservedQty ?? 0;
+    const freeQty = Math.max(0, quantity - reservedQty);
+    return {
+      ...item,
+      availableQty: freeQty,
+      onHandAtSource: quantity,
+      reservedAtSource: reservedQty
+    };
+  });
+  return { ...delivery, items };
+}
+
 export const getAllDeliveries = async (req, res) => {
   try {
     const { search, status, customerId, warehouseId } = req.query;
-
     const where = {};
-    if (status && status !== "ALL") {
-      where.status = status;
-    }
-    if (customerId) {
-      where.customerId = Number(customerId);
-    }
-    if (warehouseId) {
-      where.warehouseId = Number(warehouseId);
-    }
+    if (status && status !== "ALL") where.status = status;
+    if (customerId) where.customerId = Number(customerId);
+    if (warehouseId) where.warehouseId = Number(warehouseId);
     if (search && search.trim()) {
       const q = search.trim();
       where.OR = [
@@ -43,22 +110,14 @@ export const getAllDeliveries = async (req, res) => {
 
     const deliveries = await prisma.delivery.findMany({
       where,
-      include: {
-        customer: true,
-        warehouse: true,
-        items: {
-          include: {
-            product: true
-          }
-        }
-      },
+      include: deliveryInclude,
       orderBy: { id: "desc" }
     });
 
     res.status(200).json({
       success: true,
       count: deliveries.length,
-      data: deliveries
+      data: deliveries.map(enrichDeliveryAvailability)
     });
   } catch (error) {
     console.error("Error fetching deliveries:", error);
@@ -66,35 +125,22 @@ export const getAllDeliveries = async (req, res) => {
   }
 };
 
-// GET /deliveries/:id
 export const getDeliveryById = async (req, res) => {
   try {
-    const { id } = req.params;
     const delivery = await prisma.delivery.findUnique({
-      where: { id: Number(id) },
-      include: {
-        customer: true,
-        warehouse: true,
-        items: {
-          include: {
-            product: true
-          }
-        }
-      }
+      where: { id: Number(req.params.id) },
+      include: deliveryInclude
     });
-
     if (!delivery) {
       return res.status(404).json({ success: false, message: "Delivery order not found" });
     }
-
-    res.status(200).json({ success: true, data: delivery });
+    res.status(200).json({ success: true, data: enrichDeliveryAvailability(delivery) });
   } catch (error) {
     console.error("Error fetching delivery:", error);
     res.status(500).json({ success: false, message: "Failed to fetch delivery", error: error.message });
   }
 };
 
-// POST /deliveries
 export const createDelivery = async (req, res) => {
   try {
     const {
@@ -114,11 +160,17 @@ export const createDelivery = async (req, res) => {
       totalAmount = 0,
       customerId,
       warehouseId,
+      sourceLocationId,
       moNumber,
       items = []
     } = req.body;
 
-    const finalReference = reference || (await generateDeliveryReference(warehouseId));
+    if (status === "done") {
+      return res.status(400).json({
+        success: false,
+        message: "Use validate endpoint to complete a delivery"
+      });
+    }
 
     let calculatedSubtotal = 0;
     const itemsData = items.map((item) => {
@@ -131,12 +183,19 @@ export const createDelivery = async (req, res) => {
         name: item.name || "Unnamed Item",
         sku: item.sku || null,
         quantity: qty,
-        deliveredQty: Number(item.deliveredQty) || (status === "done" ? qty : 0),
+        deliveredQty: 0,
         unitCost: cost,
         totalPrice: total,
         unit: item.unit || "Units"
       };
     });
+
+    const locId = sourceLocationId ? Number(sourceLocationId) : null;
+    if (locId && itemsData.some((i) => i.productId)) {
+      await withStockTransaction(async (tx) => {
+        await assertItemsAvailable(tx, itemsData, locId);
+      });
+    }
 
     const finalSubtotal = subtotal > 0 ? Number(subtotal) : calculatedSubtotal;
     const finalTax = taxAmount > 0 ? Number(taxAmount) : (finalSubtotal * Number(taxRate)) / 100;
@@ -144,8 +203,8 @@ export const createDelivery = async (req, res) => {
 
     const delivery = await prisma.delivery.create({
       data: {
-        reference: finalReference,
-        status,
+        reference: reference || (await generateDeliveryReference(warehouseId)),
+        status: status === "in_progress" || status === "ready" ? "draft" : status,
         scheduledDate: scheduledDate || new Date().toISOString().split("T")[0],
         destination,
         responsible,
@@ -160,30 +219,27 @@ export const createDelivery = async (req, res) => {
         totalAmount: finalTotal,
         customerId: customerId ? Number(customerId) : null,
         warehouseId: warehouseId ? Number(warehouseId) : null,
+        sourceLocationId: locId,
         moNumber,
-        items: {
-          create: itemsData
-        }
+        items: { create: itemsData }
       },
-      include: {
-        customer: true,
-        warehouse: true,
-        items: true
-      }
+      include: deliveryInclude
     });
 
     res.status(201).json({
       success: true,
       message: "Delivery order created successfully",
-      data: delivery
+      data: enrichDeliveryAvailability(delivery)
     });
   } catch (error) {
     console.error("Error creating delivery:", error);
-    res.status(500).json({ success: false, message: "Failed to create delivery", error: error.message });
+    res.status(error.status || 500).json({
+      success: false,
+      message: error.message || "Failed to create delivery"
+    });
   }
 };
 
-// PATCH /deliveries/:id
 export const updateDelivery = async (req, res) => {
   try {
     const { id } = req.params;
@@ -203,17 +259,74 @@ export const updateDelivery = async (req, res) => {
       totalAmount,
       customerId,
       warehouseId,
+      sourceLocationId,
       moNumber,
       items
     } = req.body;
 
-    const existing = await prisma.delivery.findUnique({ where: { id: Number(id) } });
+    const existing = await prisma.delivery.findUnique({
+      where: { id: Number(id) },
+      include: { items: true }
+    });
     if (!existing) {
       return res.status(404).json({ success: false, message: "Delivery order not found" });
     }
+    if (existing.status === "done") {
+      return res.status(400).json({ success: false, message: "Completed deliveries cannot be edited" });
+    }
+    if (status === "done") {
+      return res.status(400).json({
+        success: false,
+        message: "Use POST /deliveries/:id/validate to complete a delivery"
+      });
+    }
+    // Cancel: release reservations if already picked/packed
+    if (status === "cancelled") {
+      const cancelled = await withStockTransaction(async (tx) => {
+        const delivery = await tx.delivery.findUnique({
+          where: { id: Number(id) },
+          include: { items: true }
+        });
+        const locationId = await resolveSourceLocationId(tx, delivery);
+        if (
+          locationId &&
+          (delivery.status === "in_progress" || delivery.status === "ready")
+        ) {
+          for (const item of delivery.items) {
+            if (!item.productId) continue;
+            await releaseReservation(tx, {
+              productId: item.productId,
+              locationId,
+              qty: Number(item.quantity) || 0
+            });
+          }
+        }
+        return tx.delivery.update({
+          where: { id: Number(id) },
+          data: { status: "cancelled" },
+          include: deliveryInclude
+        });
+      });
+      return res.status(200).json({
+        success: true,
+        message: "Delivery cancelled; reserved stock released",
+        data: enrichDeliveryAvailability(cancelled)
+      });
+    }
+
+    // Do not allow editing lines once reserved (pick started)
+    if (
+      (existing.status === "in_progress" || existing.status === "ready") &&
+      (Array.isArray(items) || sourceLocationId !== undefined)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Cannot change items or source location after pick; cancel and recreate"
+      });
+    }
 
     const updateData = {};
-    if (status !== undefined) updateData.status = status;
+    if (status !== undefined && status !== "cancelled") updateData.status = status;
     if (scheduledDate !== undefined) updateData.scheduledDate = scheduledDate;
     if (destination !== undefined) updateData.destination = destination;
     if (responsible !== undefined) updateData.responsible = responsible;
@@ -228,55 +341,95 @@ export const updateDelivery = async (req, res) => {
     if (totalAmount !== undefined) updateData.totalAmount = Number(totalAmount);
     if (customerId !== undefined) updateData.customerId = customerId ? Number(customerId) : null;
     if (warehouseId !== undefined) updateData.warehouseId = warehouseId ? Number(warehouseId) : null;
+    if (sourceLocationId !== undefined) {
+      updateData.sourceLocationId = sourceLocationId ? Number(sourceLocationId) : null;
+    }
     if (moNumber !== undefined) updateData.moNumber = moNumber;
 
+    let nextItems = existing.items;
     if (Array.isArray(items)) {
+      nextItems = items.map((item) => ({
+        productId: item.productId ? Number(item.productId) : null,
+        name: item.name || "Unnamed Item",
+        sku: item.sku || null,
+        quantity: Number(item.quantity) || 1,
+        deliveredQty: Number(item.deliveredQty) || 0,
+        unitCost: Number(item.unitCost) || 0,
+        totalPrice:
+          Number(item.totalPrice) ||
+          (Number(item.quantity) || 1) * (Number(item.unitCost) || 0),
+        unit: item.unit || "Units"
+      }));
       await prisma.deliveryItem.deleteMany({ where: { deliveryId: Number(id) } });
-      updateData.items = {
-        create: items.map((item) => ({
-          productId: item.productId ? Number(item.productId) : null,
-          name: item.name || "Unnamed Item",
-          sku: item.sku || null,
-          quantity: Number(item.quantity) || 1,
-          deliveredQty: Number(item.deliveredQty) || 0,
-          unitCost: Number(item.unitCost) || 0,
-          totalPrice: Number(item.totalPrice) || (Number(item.quantity) || 1) * (Number(item.unitCost) || 0),
-          unit: item.unit || "Units"
-        }))
-      };
+      updateData.items = { create: nextItems };
+    }
+
+    const locId =
+      sourceLocationId !== undefined
+        ? sourceLocationId
+          ? Number(sourceLocationId)
+          : null
+        : existing.sourceLocationId;
+
+    if (locId && nextItems.some((i) => i.productId)) {
+      await withStockTransaction(async (tx) => {
+        await assertItemsAvailable(tx, nextItems, locId);
+      });
     }
 
     const updated = await prisma.delivery.update({
       where: { id: Number(id) },
       data: updateData,
-      include: {
-        customer: true,
-        warehouse: true,
-        items: true
-      }
+      include: deliveryInclude
     });
 
     res.status(200).json({
       success: true,
       message: "Delivery order updated successfully",
-      data: updated
+      data: enrichDeliveryAvailability(updated)
     });
   } catch (error) {
     console.error("Error updating delivery:", error);
-    res.status(500).json({ success: false, message: "Failed to update delivery", error: error.message });
+    res.status(error.status || 500).json({
+      success: false,
+      message: error.message || "Failed to update delivery"
+    });
   }
 };
 
-// DELETE /deliveries/:id
 export const deleteDelivery = async (req, res) => {
   try {
-    const { id } = req.params;
-    const existing = await prisma.delivery.findUnique({ where: { id: Number(id) } });
+    const existing = await prisma.delivery.findUnique({
+      where: { id: Number(req.params.id) },
+      include: { items: true }
+    });
     if (!existing) {
       return res.status(404).json({ success: false, message: "Delivery order not found" });
     }
+    if (existing.status === "done") {
+      return res.status(400).json({
+        success: false,
+        message: "Cannot delete a completed delivery"
+      });
+    }
 
-    await prisma.delivery.delete({ where: { id: Number(id) } });
+    await withStockTransaction(async (tx) => {
+      const locationId = await resolveSourceLocationId(tx, existing);
+      if (
+        locationId &&
+        (existing.status === "in_progress" || existing.status === "ready")
+      ) {
+        for (const item of existing.items) {
+          if (!item.productId) continue;
+          await releaseReservation(tx, {
+            productId: item.productId,
+            locationId,
+            qty: Number(item.quantity) || 0
+          });
+        }
+      }
+      await tx.delivery.delete({ where: { id: Number(req.params.id) } });
+    });
 
     res.status(200).json({
       success: true,
@@ -288,173 +441,271 @@ export const deleteDelivery = async (req, res) => {
   }
 };
 
-// POST /deliveries/:id/pick (Record picking - moves status to in_progress)
+/** Pick: reserve free stock so it cannot be sold twice */
 export const pickDelivery = async (req, res) => {
   try {
     const { id } = req.params;
-    const delivery = await prisma.delivery.findUnique({ where: { id: Number(id) } });
-    if (!delivery) {
-      return res.status(404).json({ success: false, message: "Delivery order not found" });
-    }
 
-    const updated = await prisma.delivery.update({
-      where: { id: Number(id) },
-      data: { status: "in_progress" },
-      include: { items: true, customer: true }
+    const updated = await withStockTransaction(async (tx) => {
+      const delivery = await tx.delivery.findUnique({
+        where: { id: Number(id) },
+        include: { items: { include: { product: true } } }
+      });
+      if (!delivery) {
+        const err = new Error("Delivery order not found");
+        err.status = 404;
+        throw err;
+      }
+      if (delivery.status === "done") {
+        const err = new Error("Delivery already completed");
+        err.status = 400;
+        throw err;
+      }
+      if (delivery.status === "cancelled") {
+        const err = new Error("Delivery is cancelled");
+        err.status = 400;
+        throw err;
+      }
+      if (delivery.status === "in_progress" || delivery.status === "ready") {
+        const err = new Error("Delivery already picked / reserved");
+        err.status = 400;
+        throw err;
+      }
+
+      const locationId = await resolveSourceLocationId(tx, delivery);
+      if (!locationId) {
+        const err = new Error("Delivery needs sourceLocationId before pick");
+        err.status = 400;
+        throw err;
+      }
+
+      await assertItemsAvailable(tx, delivery.items, locationId);
+
+      for (const item of delivery.items) {
+        const qty = Number(item.quantity) || 0;
+        if (!item.productId || qty <= 0) continue;
+        await reserveStock(tx, {
+          productId: item.productId,
+          locationId,
+          qty,
+          productName: item.product?.name || item.name
+        });
+      }
+
+      return tx.delivery.update({
+        where: { id: Number(id) },
+        data: { status: "in_progress", sourceLocationId: locationId },
+        include: deliveryInclude
+      });
     });
 
     res.status(200).json({
       success: true,
-      message: `Delivery ${delivery.reference} marked as In Progress (Picking Complete)`,
-      data: updated
+      message: `Delivery ${updated.reference} picked — stock reserved`,
+      data: enrichDeliveryAvailability(updated)
     });
   } catch (error) {
     console.error("Error recording pick:", error);
-    res.status(500).json({ success: false, message: "Failed to record pick", error: error.message });
+    res.status(error.status || 500).json({
+      success: false,
+      message: error.message || "Failed to record pick"
+    });
   }
 };
 
-// POST /deliveries/:id/pack (Record packing - moves status to ready)
+/** Pack: re-check reserved stock still physically present; mark ready */
 export const packDelivery = async (req, res) => {
   try {
     const { id } = req.params;
-    const delivery = await prisma.delivery.findUnique({ where: { id: Number(id) } });
-    if (!delivery) {
-      return res.status(404).json({ success: false, message: "Delivery order not found" });
-    }
 
-    const updated = await prisma.delivery.update({
-      where: { id: Number(id) },
-      data: { status: "ready" },
-      include: { items: true, customer: true }
+    const updated = await withStockTransaction(async (tx) => {
+      const delivery = await tx.delivery.findUnique({
+        where: { id: Number(id) },
+        include: { items: { include: { product: true } }, sourceLocation: true }
+      });
+      if (!delivery) {
+        const err = new Error("Delivery order not found");
+        err.status = 404;
+        throw err;
+      }
+      if (delivery.status === "done") {
+        const err = new Error("Delivery already completed");
+        err.status = 400;
+        throw err;
+      }
+      if (delivery.status === "cancelled") {
+        const err = new Error("Delivery is cancelled");
+        err.status = 400;
+        throw err;
+      }
+
+      const locationId = await resolveSourceLocationId(tx, delivery);
+      if (!locationId) {
+        const err = new Error("Delivery needs sourceLocationId");
+        err.status = 400;
+        throw err;
+      }
+
+      // If not yet picked, pick+reserve first
+      if (delivery.status === "draft") {
+        await assertItemsAvailable(tx, delivery.items, locationId);
+        for (const item of delivery.items) {
+          const qty = Number(item.quantity) || 0;
+          if (!item.productId || qty <= 0) continue;
+          await reserveStock(tx, {
+            productId: item.productId,
+            locationId,
+            qty,
+            productName: item.product?.name || item.name
+          });
+        }
+      }
+
+      // Physical on-hand must still cover reserved qty
+      for (const item of delivery.items) {
+        const qty = Number(item.quantity) || 0;
+        if (!item.productId || qty <= 0) continue;
+        const quant = await tx.stockQuant.findUnique({
+          where: {
+            productId_locationId: { productId: item.productId, locationId }
+          }
+        });
+        const onHand = quant?.quantity || 0;
+        if (onHand < qty) {
+          const err = new Error(
+            `Insufficient stock for ${item.product?.name || item.name}: need ${qty}, on hand ${onHand}`
+          );
+          err.status = 400;
+          throw err;
+        }
+      }
+
+      return tx.delivery.update({
+        where: { id: Number(id) },
+        data: {
+          status: "ready",
+          sourceLocationId: locationId
+        },
+        include: deliveryInclude
+      });
     });
 
     res.status(200).json({
       success: true,
-      message: `Delivery ${delivery.reference} marked as Ready (Packing Complete)`,
-      data: updated
+      message: `Delivery ${updated.reference} marked Ready`,
+      data: enrichDeliveryAvailability(updated)
     });
   } catch (error) {
     console.error("Error recording pack:", error);
-    res.status(500).json({ success: false, message: "Failed to record pack", error: error.message });
+    res.status(error.status || 500).json({
+      success: false,
+      message: error.message || "Failed to record pack"
+    });
   }
 };
 
-// POST /deliveries/:id/validate (Validate and decrease stock)
+/** Validate: ship only what is on hand (no BOM invent). Releases reservation + decreases qty. */
 export const validateDelivery = async (req, res) => {
   try {
     const { id } = req.params;
-    const delivery = await prisma.delivery.findUnique({
-      where: { id: Number(id) },
-      include: {
-        items: true,
-        warehouse: true,
-        customer: true
-      }
-    });
+    const userId = req.user?.userId ? Number(req.user.userId) : null;
 
-    if (!delivery) {
-      return res.status(404).json({ success: false, message: "Delivery order not found" });
-    }
-
-    if (delivery.status === "done") {
-      return res.status(400).json({ success: false, message: "Delivery is already completed and dispatched" });
-    }
-
-    const movementsToCreate = [];
-
-    for (const item of delivery.items) {
-      const qty = Number(item.quantity) || 0;
-
-      if (item.productId) {
-        const product = await prisma.product.findUnique({ where: { id: item.productId } });
-        if (product) {
-          const newOnHand = Math.max(0, product.onHand - qty);
-          const newFree = Math.max(0, product.freeToUse - qty);
-
-          await prisma.product.update({
-            where: { id: product.id },
-            data: {
-              onHand: newOnHand,
-              freeToUse: newFree
-            }
-          });
-
-          movementsToCreate.push({
-            reference: delivery.reference,
-            type: "OUT",
-            productId: product.id,
-            productName: product.name,
-            sku: product.sku,
-            fromLocation: delivery.warehouse?.name || "Central Stock Room",
-            toLocation: delivery.customer?.name || delivery.destination || "Customer Destination",
-            quantity: qty,
-            unit: item.unit || "Units",
-            balanceAfter: newOnHand,
-            reason: `Delivery Dispatch (${delivery.reference})`,
-            responsible: delivery.responsible || "Rohit Maurya"
-          });
+    const updatedDelivery = await withStockTransaction(async (tx) => {
+      const delivery = await tx.delivery.findUnique({
+        where: { id: Number(id) },
+        include: {
+          items: { include: { product: true } },
+          warehouse: true,
+          customer: true,
+          sourceLocation: true
         }
-      } else if (item.sku) {
-        const product = await prisma.product.findUnique({ where: { sku: item.sku } });
-        if (product) {
-          const newOnHand = Math.max(0, product.onHand - qty);
-          const newFree = Math.max(0, product.freeToUse - qty);
+      });
+      if (!delivery) {
+        const err = new Error("Delivery order not found");
+        err.status = 404;
+        throw err;
+      }
+      if (delivery.status === "done") {
+        const err = new Error("Delivery is already completed and dispatched");
+        err.status = 400;
+        throw err;
+      }
+      if (delivery.status === "cancelled") {
+        const err = new Error("Delivery is cancelled");
+        err.status = 400;
+        throw err;
+      }
 
-          await prisma.product.update({
-            where: { id: product.id },
-            data: {
-              onHand: newOnHand,
-              freeToUse: newFree
-            }
-          });
+      const locationId = await resolveSourceLocationId(tx, delivery);
+      if (!locationId) {
+        const err = new Error("Delivery needs sourceLocationId");
+        err.status = 400;
+        throw err;
+      }
 
-          movementsToCreate.push({
-            reference: delivery.reference,
-            type: "OUT",
-            productId: product.id,
-            productName: product.name,
-            sku: product.sku,
-            fromLocation: delivery.warehouse?.name || "Central Stock Room",
-            toLocation: delivery.customer?.name || delivery.destination || "Customer Destination",
-            quantity: qty,
-            unit: item.unit || "Units",
-            balanceAfter: newOnHand,
-            reason: `Delivery Dispatch (${delivery.reference})`,
-            responsible: delivery.responsible || "Rohit Maurya"
-          });
+      const wasReserved =
+        delivery.status === "in_progress" || delivery.status === "ready";
+
+      // Draft validate: check free stock without prior reservation
+      if (!wasReserved) {
+        await assertItemsAvailable(tx, delivery.items, locationId);
+      }
+
+      for (const item of delivery.items) {
+        const qty = Number(item.quantity) || 0;
+        if (qty <= 0) continue;
+
+        let productId = item.productId;
+        let product = item.product;
+        if (!productId && item.sku) {
+          product = await tx.product.findUnique({ where: { sku: item.sku } });
+          productId = product?.id || null;
         }
+        if (!productId) {
+          const err = new Error(`Delivery line "${item.name}" has no product — cannot ship`);
+          err.status = 400;
+          throw err;
+        }
+
+        await applyOutReserved(tx, {
+          productId,
+          locationId,
+          qty,
+          unit: item.unit || "Units",
+          productName: item.name,
+          sku: item.sku,
+          reason: `Delivery Dispatch (${delivery.reference})`,
+          responsible: delivery.responsible,
+          userId,
+          documentType: "DELIVERY",
+          documentId: delivery.id,
+          reference: delivery.reference,
+          wasReserved
+        });
+
+        await tx.deliveryItem.update({
+          where: { id: item.id },
+          data: { deliveredQty: qty, productId }
+        });
       }
 
-      await prisma.deliveryItem.update({
-        where: { id: item.id },
-        data: { deliveredQty: qty }
+      return tx.delivery.update({
+        where: { id: Number(id) },
+        data: { status: "done", sourceLocationId: locationId },
+        include: deliveryInclude
       });
-    }
-
-    if (movementsToCreate.length > 0) {
-      await prisma.stockMovement.createMany({
-        data: movementsToCreate
-      });
-    }
-
-    const updatedDelivery = await prisma.delivery.update({
-      where: { id: Number(id) },
-      data: { status: "done" },
-      include: {
-        customer: true,
-        warehouse: true,
-        items: true
-      }
     });
 
     res.status(200).json({
       success: true,
-      message: `Delivery ${delivery.reference} validated and dispatched successfully. Stock decreased.`,
-      data: updatedDelivery
+      message: `Delivery ${updatedDelivery.reference} validated and dispatched. Stock decreased.`,
+      data: enrichDeliveryAvailability(updatedDelivery)
     });
   } catch (error) {
     console.error("Error validating delivery:", error);
-    res.status(500).json({ success: false, message: "Failed to validate delivery", error: error.message });
+    res.status(error.status || 500).json({
+      success: false,
+      message: error.message || "Failed to validate delivery"
+    });
   }
 };

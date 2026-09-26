@@ -7,14 +7,18 @@ import {
   deleteReceipt,
   validateReceipt
 } from "../controllers/receiptController.js";
+import { protect, authorize } from "../middlewares/authMiddleware.js";
 
 const router = express.Router();
+const managers = authorize("OWNER", "INVENTORY_MANAGER");
+
+router.use(protect);
 
 router.get("/", getAllReceipts);
-router.post("/", createReceipt);
 router.get("/:id", getReceiptById);
-router.patch("/:id", updateReceipt);
-router.delete("/:id", deleteReceipt);
-router.post("/:id/validate", validateReceipt);
+router.post("/", managers, createReceipt);
+router.patch("/:id", managers, updateReceipt);
+router.delete("/:id", managers, deleteReceipt);
+router.post("/:id/validate", managers, validateReceipt);
 
 export default router;

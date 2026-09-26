@@ -1,4 +1,5 @@
 import prisma from "../config/prisma.js";
+import { applyAdjustment, withStockTransaction } from "../services/stockService.js";
 
 // Helper to generate reference: ADJ/YYYY/<PaddedID> (e.g. ADJ/2026/001)
 async function generateAdjustmentReference() {
@@ -262,86 +263,70 @@ export const deleteAdjustment = async (req, res) => {
 export const validateAdjustment = async (req, res) => {
   try {
     const { id } = req.params;
-    const adjustment = await prisma.adjustment.findUnique({
-      where: { id: Number(id) },
-      include: {
-        location: true,
-        items: true
-      }
-    });
+    const userId = req.user?.userId ? Number(req.user.userId) : null;
 
-    if (!adjustment) {
-      return res.status(404).json({ success: false, message: "Adjustment record not found" });
-    }
-
-    if (adjustment.status === "done") {
-      return res.status(400).json({ success: false, message: "Adjustment is already validated and applied" });
-    }
-
-    const movementsToCreate = [];
-
-    for (const item of adjustment.items) {
-      const counted = Number(item.countedQty);
-      const diff = Number(item.variance);
-
-      let p = null;
-      if (item.productId) {
-        p = await prisma.product.findUnique({ where: { id: item.productId } });
-      } else if (item.sku) {
-        p = await prisma.product.findUnique({ where: { sku: item.sku } });
-      }
-
-      if (p) {
-        const freeDiff = counted - p.onHand;
-        const newFree = Math.max(0, p.freeToUse + freeDiff);
-
-        await prisma.product.update({
-          where: { id: p.id },
-          data: {
-            onHand: counted,
-            freeToUse: newFree
-          }
-        });
-
-        movementsToCreate.push({
-          reference: adjustment.reference,
-          type: "ADJUSTMENT",
-          productId: p.id,
-          productName: p.name,
-          sku: p.sku,
-          fromLocation: diff < 0 ? (adjustment.location?.name || "Inventory Audit") : "Inventory Audit Correction",
-          toLocation: diff >= 0 ? (adjustment.location?.name || "Inventory Audit") : "Scrap / Audit Loss",
-          quantity: Math.abs(diff),
-          unit: item.unit || "Units",
-          balanceAfter: counted,
-          reason: `Physical Count Adjustment (${adjustment.reference}) - Variance: ${diff > 0 ? `+${diff}` : diff}`,
-          responsible: adjustment.responsible || "Rohit Maurya"
-        });
-      }
-    }
-
-    if (movementsToCreate.length > 0) {
-      await prisma.stockMovement.createMany({
-        data: movementsToCreate
+    const updatedAdjustment = await withStockTransaction(async (tx) => {
+      const adjustment = await tx.adjustment.findUnique({
+        where: { id: Number(id) },
+        include: { location: true, items: true }
       });
-    }
-
-    const updatedAdjustment = await prisma.adjustment.update({
-      where: { id: Number(id) },
-      data: { status: "done" },
-      include: {
-        location: true,
-        items: true
+      if (!adjustment) {
+        const err = new Error("Adjustment record not found");
+        err.status = 404;
+        throw err;
       }
+      if (adjustment.status === "done") {
+        const err = new Error("Adjustment is already validated and applied");
+        err.status = 400;
+        throw err;
+      }
+      if (!adjustment.locationId) {
+        const err = new Error("Adjustment needs a locationId");
+        err.status = 400;
+        throw err;
+      }
+
+      for (const item of adjustment.items) {
+        let productId = item.productId;
+        if (!productId && item.sku) {
+          const p = await tx.product.findUnique({ where: { sku: item.sku } });
+          productId = p?.id || null;
+        }
+        if (!productId) continue;
+
+        await applyAdjustment(tx, {
+          productId,
+          locationId: adjustment.locationId,
+          countedQty: Number(item.countedQty),
+          unit: item.unit,
+          productName: item.name,
+          sku: item.sku,
+          reason: `${adjustment.reason || "Physical Count"} (${adjustment.reference})`,
+          responsible: adjustment.responsible,
+          userId,
+          documentType: "ADJUSTMENT",
+          documentId: adjustment.id,
+          reference: adjustment.reference
+        });
+      }
+
+      return tx.adjustment.update({
+        where: { id: Number(id) },
+        data: { status: "done" },
+        include: { location: true, items: true }
+      });
     });
 
     res.status(200).json({
       success: true,
-      message: `Adjustment ${adjustment.reference} validated successfully. Stock on hand updated to physical counts.`,
+      message: `Adjustment ${updatedAdjustment.reference} validated. Location stock updated.`,
       data: updatedAdjustment
     });
   } catch (error) {
     console.error("Error validating adjustment:", error);
-    res.status(500).json({ success: false, message: "Failed to validate adjustment", error: error.message });
+    res.status(error.status || 500).json({
+      success: false,
+      message: error.message || "Failed to validate adjustment"
+    });
   }
 };

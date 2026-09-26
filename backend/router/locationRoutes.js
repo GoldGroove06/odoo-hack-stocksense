@@ -1,4 +1,5 @@
 import express from "express";
+import { protect, authorize } from "../middlewares/authMiddleware.js";
 import {
   listLocations,
   getLocationById,
@@ -8,6 +9,9 @@ import {
 } from "../controllers/locationController.js";
 
 const router = express.Router();
+
+router.use(protect);
+
 
 // GET /locations - List locations
 // POST /locations - Create location

@@ -7,14 +7,19 @@ import {
   deleteAdjustment,
   validateAdjustment
 } from "../controllers/adjustmentController.js";
+import { protect, authorize } from "../middlewares/authMiddleware.js";
 
 const router = express.Router();
+const staffOrManagers = authorize("OWNER", "INVENTORY_MANAGER", "WAREHOUSE_STAFF");
+const managers = authorize("OWNER", "INVENTORY_MANAGER");
 
-router.get("/", getAllAdjustments);
-router.post("/", createAdjustment);
-router.get("/:id", getAdjustmentById);
-router.patch("/:id", updateAdjustment);
-router.delete("/:id", deleteAdjustment);
-router.post("/:id/validate", validateAdjustment);
+router.use(protect);
+
+router.get("/", staffOrManagers, getAllAdjustments);
+router.get("/:id", staffOrManagers, getAdjustmentById);
+router.post("/", staffOrManagers, createAdjustment);
+router.patch("/:id", staffOrManagers, updateAdjustment);
+router.delete("/:id", managers, deleteAdjustment);
+router.post("/:id/validate", managers, validateAdjustment);
 
 export default router;
