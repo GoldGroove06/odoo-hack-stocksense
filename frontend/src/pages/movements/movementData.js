@@ -14,7 +14,7 @@ export const WAREHOUSE_LOCATIONS = [
 ];
 
 export const STAFF_LIST = [
-  { id: 'EMP-101', name: 'Rohit Maurya', role: 'Warehouse Lead' },
+  { id: 'EMP-101', name: 'Warehouse Staff', role: 'Warehouse Lead' },
   { id: 'EMP-102', name: 'Devendra Patel', role: 'Inventory Shift Manager' },
   { id: 'EMP-103', name: 'Kavita Nair', role: 'Material Handler' },
   { id: 'EMP-104', name: 'Sandeep Varma', role: 'Forklift Operator' }
@@ -110,7 +110,7 @@ export const INITIAL_MOVEMENT_HISTORY = [
     type: 'IN', // 'IN' | 'OUT' | 'INTERNAL' | 'MANUFACTURING'
     status: 'Done',
     staffId: 'EMP-101',
-    staffName: 'Rohit Maurya',
+    staffName: 'Warehouse Staff',
     linkedDoc: 'WH/IN/00042',
     notes: 'Receipt put-away after dock quality verification'
   },
@@ -130,7 +130,7 @@ export const INITIAL_MOVEMENT_HISTORY = [
     type: 'IN',
     status: 'Done',
     staffId: 'EMP-101',
-    staffName: 'Rohit Maurya',
+    staffName: 'Warehouse Staff',
     linkedDoc: 'WH/IN/00042',
     notes: 'Sealant cartridges shifted to chemical storage rack'
   },

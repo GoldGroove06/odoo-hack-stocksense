@@ -18,8 +18,12 @@ import {
   Link as LinkIcon
 } from 'lucide-react';
 import { productApi, locationApi, movementApi } from '../../services/api';
+import { useAuth } from '../../context/AuthContext';
 
 export default function ExecuteMoveForm({ onExecuteMove }) {
+  const { user } = useAuth();
+  const loggedInUserName = user?.name || 'Warehouse Staff';
+
   const [moveType, setMoveType] = useState('internal'); // 'internal' | 'incoming' | 'outgoing'
   
   const [products, setProducts] = useState([]);
@@ -28,11 +32,11 @@ export default function ExecuteMoveForm({ onExecuteMove }) {
   const [selectedProductId, setSelectedProductId] = useState('');
   const [quantity, setQuantity] = useState(10);
   
-  const [fromLocation, setFromLocation] = useState('Main Bay A1');
-  const [toLocation, setToLocation] = useState('Production Bay B2');
+  const [fromLocation, setFromLocation] = useState('');
+  const [toLocation, setToLocation] = useState('');
   
   const [reference, setReference] = useState(`MV-${Date.now().toString().slice(-6)}`);
-  const [responsible, setResponsible] = useState('Rohit Maurya');
+  const [responsible, setResponsible] = useState(loggedInUserName);
   const [reason, setReason] = useState('Internal Warehouse Bay Shift');
   const [notes, setNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);

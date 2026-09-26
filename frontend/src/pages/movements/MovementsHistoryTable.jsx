@@ -263,7 +263,7 @@ export default function MovementsHistoryTable({ history = [], onRefresh, onExecu
 
                     {/* Staff in Charge */}
                     <td className="py-3.5 px-4 text-slate-600 text-xs">
-                      {item.responsible || 'Rohit Maurya'}
+                      {item.responsible || 'Warehouse Staff'}
                     </td>
                   </tr>
                 );

@@ -1,11 +1,13 @@
 // API Client Service for StockSense ERP Integration
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api/v1';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000/api/v1';
 
 async function request(endpoint, options = {}) {
   const url = `${API_BASE_URL}${endpoint}`;
+  const token = localStorage.getItem('token');
   const headers = {
     'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...options.headers
   };
 

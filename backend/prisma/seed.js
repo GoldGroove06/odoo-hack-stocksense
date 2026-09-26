@@ -49,7 +49,7 @@ async function main() {
       name: "Central Warehouse & Hub",
       shortcode: "WH",
       address: "Plot 48, Electronic Zone, Phase II, Pune, Maharashtra 411057",
-      manager: "Rohit Maurya",
+      manager: "Warehouse Manager",
       phone: "+91 98201 44521"
     },
     {

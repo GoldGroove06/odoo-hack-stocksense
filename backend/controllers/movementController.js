@@ -57,7 +57,7 @@ export const createMovement = async (req, res) => {
       unit = "Units",
       balanceAfter,
       reason,
-      responsible = "Rohit Maurya"
+      responsible = "Warehouse Staff"
     } = req.body;
 
     const movement = await prisma.stockMovement.create({

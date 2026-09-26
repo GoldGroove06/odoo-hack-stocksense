@@ -40,7 +40,7 @@ export const SAMPLE_SUPPLIERS = [
 ];
 
 export const STAFF_MEMBERS = [
-  { id: 'staff-1', name: 'Rohit Maurya', role: 'Warehouse Lead' },
+  { id: 'staff-1', name: 'Warehouse Staff', role: 'Warehouse Lead' },
   { id: 'staff-2', name: 'Ananya Sharma', role: 'Inventory Controller' },
   { id: 'staff-3', name: 'Devendra Patel', role: 'Operations Manager' },
   { id: 'staff-4', name: 'Priya Iyer', role: 'Quality Inspector' }
@@ -116,7 +116,7 @@ export const INITIAL_RECEIPTS_LIST = [
     sellerBillNumber: 'INV-TL-2026-904',
     createdOn: '2026-09-26 10:30 AM',
     scheduledDate: '2026-09-28',
-    responsible: 'Rohit Maurya',
+    responsible: 'Warehouse Staff',
     responsibleId: 'staff-1',
     status: 'ready', // 'draft' | 'in_progress' | 'ready' | 'done' | 'cancelled'
     movementStatus: 'arrived',
@@ -286,7 +286,7 @@ export const INITIAL_RECEIPTS_LIST = [
     sellerBillNumber: 'INV-TL-2026-950',
     createdOn: '2026-09-26 09:00 AM',
     scheduledDate: '2026-10-02',
-    responsible: 'Rohit Maurya',
+    responsible: 'Warehouse Staff',
     responsibleId: 'staff-1',
     status: 'draft',
     movementStatus: 'creation',

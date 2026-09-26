@@ -102,7 +102,7 @@ export const createDelivery = async (req, res) => {
       status = "draft",
       scheduledDate,
       destination,
-      responsible = "Rohit Maurya",
+      responsible = "Warehouse Staff",
       carrier = "Internal Logistics",
       trackingNumber,
       vehicleNumber,
@@ -117,6 +117,14 @@ export const createDelivery = async (req, res) => {
       moNumber,
       items = []
     } = req.body;
+
+    const todayStr = new Date().toISOString().split("T")[0];
+    if (scheduledDate && scheduledDate < todayStr) {
+      return res.status(400).json({
+        success: false,
+        message: "Scheduled date cannot be in the past (must be today or later)"
+      });
+    }
 
     const finalReference = reference || (await generateDeliveryReference(warehouseId));
 
@@ -171,6 +179,53 @@ export const createDelivery = async (req, res) => {
         items: true
       }
     });
+
+    // If delivery created directly in 'done' status, decrease stock immediately
+    if (status === "done") {
+      const movementsToCreate = [];
+      for (const item of delivery.items) {
+        const qty = Number(item.quantity) || 0;
+
+        let product = null;
+        if (item.productId) {
+          product = await prisma.product.findUnique({ where: { id: item.productId } });
+        } else if (item.sku) {
+          product = await prisma.product.findUnique({ where: { sku: item.sku } });
+        }
+
+        if (product) {
+          const newOnHand = Math.max(0, product.onHand - qty);
+          const newFree = Math.max(0, product.freeToUse - qty);
+
+          await prisma.product.update({
+            where: { id: product.id },
+            data: {
+              onHand: newOnHand,
+              freeToUse: newFree
+            }
+          });
+
+          movementsToCreate.push({
+            reference: delivery.reference,
+            type: "OUT",
+            productId: product.id,
+            productName: product.name,
+            sku: product.sku,
+            fromLocation: delivery.warehouse?.name || "Central Stock Room",
+            toLocation: delivery.customer?.name || delivery.destination || "Customer Destination",
+            quantity: qty,
+            unit: item.unit || "Units",
+            balanceAfter: newOnHand,
+            reason: `Direct Delivery Dispatch (${delivery.reference})`,
+            responsible: delivery.responsible || "Warehouse Staff"
+          });
+        }
+      }
+
+      if (movementsToCreate.length > 0) {
+        await prisma.stockMovement.createMany({ data: movementsToCreate });
+      }
+    }
 
     res.status(201).json({
       success: true,
@@ -392,7 +447,7 @@ export const validateDelivery = async (req, res) => {
             unit: item.unit || "Units",
             balanceAfter: newOnHand,
             reason: `Delivery Dispatch (${delivery.reference})`,
-            responsible: delivery.responsible || "Rohit Maurya"
+            responsible: delivery.responsible || "Warehouse Staff"
           });
         }
       } else if (item.sku) {
@@ -421,7 +476,7 @@ export const validateDelivery = async (req, res) => {
             unit: item.unit || "Units",
             balanceAfter: newOnHand,
             reason: `Delivery Dispatch (${delivery.reference})`,
-            responsible: delivery.responsible || "Rohit Maurya"
+            responsible: delivery.responsible || "Warehouse Staff"
           });
         }
       }

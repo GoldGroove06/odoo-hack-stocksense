@@ -160,7 +160,7 @@ model Receipt {
   status           String        @default("draft")
   scheduledDate    String?
   receiveFrom      String?
-  responsible      String?       @default("Rohit Maurya")
+  responsible      String?       @default("Warehouse Staff")
   sellerBillNumber String?
   sourceDocument   String?
   internalNotes    String?
@@ -205,7 +205,7 @@ model Delivery {
   status         String         @default("draft")
   scheduledDate  String?
   destination    String?
-  responsible    String?        @default("Rohit Maurya")
+  responsible    String?        @default("Warehouse Staff")
   carrier        String?        @default("Internal Logistics")
   trackingNumber String?
   vehicleNumber  String?
@@ -258,7 +258,7 @@ model Transfer {
   notes          String?
   isManufactured Boolean        @default(false)
   moNumber       String?
-  responsible    String?        @default("Rohit Maurya")
+  responsible    String?        @default("Warehouse Staff")
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
   items          TransferItem[]
@@ -290,7 +290,7 @@ model Adjustment {
   locationId       Int?
   location         Location?        @relation(fields: [locationId], references: [id], onDelete: SetNull)
   reason           String?          @default("Annual Physical Count")
-  responsible      String?          @default("Rohit Maurya")
+  responsible      String?          @default("Warehouse Staff")
   notes            String?
   totalItems       Int              @default(0)
   netVarianceQty   Float            @default(0.0)
@@ -336,6 +336,6 @@ model StockMovement {
   unit         String   @default("Units")
   balanceAfter Float?
   reason       String?
-  responsible  String?  @default("Rohit Maurya")
+  responsible  String?  @default("Warehouse Staff")
   createdAt    DateTime @default(now())
 }

@@ -6,7 +6,7 @@ export const INITIAL_WAREHOUSES = [
     name: 'Central Warehouse & Hub',
     shortcode: 'WH',
     address: 'Plot 48, Electronic Zone, Phase II, Pune, Maharashtra 411057',
-    manager: 'Rohit Maurya',
+    manager: 'Warehouse Manager',
     phone: '+91 98201 44521',
     totalLocations: 6,
     capacity: '10,000 m³',
@@ -193,7 +193,7 @@ export const INITIAL_ADJUSTMENTS = [
     countedQty: 2400,
     difference: -50,
     reason: 'Physical count discrepancy / Discarded damaged bolts',
-    responsible: 'Rohit Maurya',
+    responsible: 'Warehouse Staff',
     status: 'Applied'
   },
   {

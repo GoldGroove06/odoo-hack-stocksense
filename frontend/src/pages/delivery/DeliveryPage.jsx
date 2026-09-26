@@ -29,6 +29,7 @@ import {
   Box
 } from 'lucide-react';
 import { deliveryApi, customerApi, warehouseApi, productApi } from '../../services/api';
+import { useAuth } from '../../context/AuthContext';
 import AddDeliveryProductModal from './AddDeliveryProductModal';
 import CustomerModal from './CustomerModal';
 import PrintDeliveryModal from './PrintDeliveryModal';
@@ -36,6 +37,9 @@ import DeliveriesListView from './DeliveriesListView';
 import Navbar from '../../components/Navbar';
 
 export default function DeliveryPage() {
+  const { user } = useAuth();
+  const loggedInUserName = user?.name || 'Warehouse Staff';
+
   const [deliveriesList, setDeliveriesList] = useState([]);
   const [loading, setLoading] = useState(true);
   const [currentView, setCurrentView] = useState('list'); // 'list' (default land) | 'detail'
@@ -53,7 +57,7 @@ export default function DeliveryPage() {
     trackingNumber: '',
     vehicleNumber: '',
     scheduledDate: new Date().toISOString().split('T')[0],
-    responsible: 'Rohit Maurya',
+    responsible: loggedInUserName,
     sourceDocument: '',
     customerNotes: '',
     customer: null,
@@ -100,7 +104,7 @@ export default function DeliveryPage() {
         trackingNumber: d.trackingNumber || '',
         vehicleNumber: d.vehicleNumber || '',
         scheduledDate: d.scheduledDate || '',
-        responsible: d.responsible || 'Rohit Maurya',
+        responsible: d.responsible || loggedInUserName,
         sourceDocument: d.sourceDocument || '',
         customerNotes: d.customerNotes || '',
         moNumber: d.moNumber || '',
@@ -224,6 +228,12 @@ export default function DeliveryPage() {
       return;
     }
 
+    const todayStr = new Date().toISOString().split('T')[0];
+    if (delivery.scheduledDate && delivery.scheduledDate < todayStr) {
+      showToast('Scheduled date cannot be in the past (must be today or later)!', 'error');
+      return;
+    }
+
     try {
       if (delivery.isNew || !delivery.id) {
         const payload = {
@@ -269,12 +279,18 @@ export default function DeliveryPage() {
   };
 
   const handleSaveDelivery = async () => {
+    const todayStr = new Date().toISOString().split('T')[0];
+    if (delivery.scheduledDate && delivery.scheduledDate < todayStr) {
+      showToast('Scheduled date cannot be in the past (must be today or later)!', 'error');
+      return;
+    }
+
     try {
       const payload = {
         status: delivery.status || 'draft',
         scheduledDate: delivery.scheduledDate,
         destination: delivery.to || delivery.destination || 'Customer Destination',
-        responsible: delivery.responsible || 'Rohit Maurya',
+        responsible: delivery.responsible || loggedInUserName,
         carrier: delivery.carrier || 'Internal Logistics',
         trackingNumber: delivery.trackingNumber || '',
         vehicleNumber: delivery.vehicleNumber || '',
@@ -368,12 +384,12 @@ export default function DeliveryPage() {
       from: warehouses[0]?.name || 'Central Stock Room',
       to: customers[0]?.name || 'Customer / Consignee',
       destination: customers[0]?.address || 'Direct Customer Delivery',
-      contact: customers[0] ? `${customers[0].contactPerson || ''} (${customers[0].phone || ''})` : 'Rohit Maurya',
+      contact: customers[0] ? `${customers[0].contactPerson || ''} (${customers[0].phone || ''})` : loggedInUserName,
       carrier: 'BlueDart Express',
       trackingNumber: '',
       vehicleNumber: '',
       scheduledDate: new Date().toISOString().split('T')[0],
-      responsible: 'Rohit Maurya',
+      responsible: loggedInUserName,
       status: 'draft',
       movementStatus: 'creation',
       customerNotes: '',
@@ -802,6 +818,7 @@ export default function DeliveryPage() {
                     </label>
                     <input
                       type="date"
+                      min={new Date().toISOString().split('T')[0]}
                       value={delivery.scheduledDate || ''}
                       onChange={(e) => setDelivery({ ...delivery, scheduledDate: e.target.value })}
                       className="w-full px-3.5 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:bg-white focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all font-medium text-slate-800"

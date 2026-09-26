@@ -14,7 +14,6 @@ import {
 } from 'lucide-react';
 import Navbar from '../../components/Navbar';
 import { locationApi, warehouseApi } from '../../services/api';
-import { INITIAL_LOCATIONS, INITIAL_WAREHOUSES } from '../../data/inventoryStore';
 
 export default function LocationsPage() {
   const [locations, setLocations] = useState([]);
@@ -92,7 +91,7 @@ export default function LocationsPage() {
       name: '',
       shortcode: '',
       address: '',
-      warehouse: warehouses[0]?.name || INITIAL_WAREHOUSES[0].name,
+      warehouse: warehouses[0]?.name || '',
       warehouseId: warehouses[0]?.id || '',
       type: 'Internal Storage',
       capacity: '1,000 Units'
@@ -108,7 +107,7 @@ export default function LocationsPage() {
       name: loc.name,
       shortcode: loc.shortcode,
       address: loc.address || '',
-      warehouse: whName || (warehouses[0]?.name || INITIAL_WAREHOUSES[0].name),
+      warehouse: whName || (warehouses[0]?.name || ''),
       warehouseId: whId,
       type: loc.type || 'Internal Storage',
       capacity: loc.capacity || '1,000 Units'
