@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   CheckCircle2,
   Printer,
@@ -25,9 +25,10 @@ import {
   Sparkles,
   Info,
   Send,
-  Navigation
+  Navigation,
+  Box
 } from 'lucide-react';
-import { INITIAL_DELIVERIES_LIST, SAMPLE_CUSTOMERS, DISPATCH_STAFF, generateDeliveryReference } from './deliveryData';
+import { deliveryApi, customerApi, warehouseApi, productApi } from '../../services/api';
 import AddDeliveryProductModal from './AddDeliveryProductModal';
 import CustomerModal from './CustomerModal';
 import PrintDeliveryModal from './PrintDeliveryModal';
@@ -35,9 +36,34 @@ import DeliveriesListView from './DeliveriesListView';
 import Navbar from '../../components/Navbar';
 
 export default function DeliveryPage() {
-  const [deliveriesList, setDeliveriesList] = useState(INITIAL_DELIVERIES_LIST);
+  const [deliveriesList, setDeliveriesList] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [currentView, setCurrentView] = useState('list'); // 'list' (default land) | 'detail'
-  const [delivery, setDelivery] = useState(INITIAL_DELIVERIES_LIST[0]);
+  
+  const [delivery, setDelivery] = useState({
+    id: null,
+    internalNumber: 'WH/OUT/001',
+    status: 'draft',
+    movementStatus: 'creation',
+    destination: '',
+    to: '',
+    from: 'Central Stock Room',
+    contact: '',
+    carrier: 'Internal Logistics',
+    trackingNumber: '',
+    vehicleNumber: '',
+    scheduledDate: new Date().toISOString().split('T')[0],
+    responsible: 'Rohit Maurya',
+    sourceDocument: '',
+    customerNotes: '',
+    customer: null,
+    warehouse: null,
+    taxRate: 18,
+    items: []
+  });
+
+  const [customers, setCustomers] = useState([]);
+  const [warehouses, setWarehouses] = useState([]);
 
   const [isAddProductOpen, setIsAddProductOpen] = useState(false);
   const [isCustomerModalOpen, setIsCustomerModalOpen] = useState(false);
@@ -51,9 +77,72 @@ export default function DeliveryPage() {
     }, 3500);
   };
 
+  const fetchDeliveries = async () => {
+    try {
+      setLoading(true);
+      const [resDeliveries, resCustomers, resWarehouses] = await Promise.all([
+        deliveryApi.getAll().catch(() => ({ data: [] })),
+        customerApi.getAll().catch(() => ({ data: [] })),
+        warehouseApi.getAll().catch(() => ({ data: [] }))
+      ]);
+
+      const formatted = (resDeliveries.data || []).map((d) => ({
+        id: d.id,
+        internalNumber: d.reference,
+        reference: d.reference,
+        status: d.status || 'draft',
+        movementStatus: d.status === 'done' ? 'delivered' : d.status === 'ready' ? 'packing' : d.status === 'in_progress' ? 'moving' : 'creation',
+        destination: d.destination || '',
+        to: d.destination || (d.customer ? d.customer.name : 'Customer Destination'),
+        from: d.warehouse ? d.warehouse.name : 'Central Stock Room',
+        contact: d.customer ? `${d.customer.contactPerson || ''} (${d.customer.phone || ''})` : d.responsible,
+        carrier: d.carrier || 'Internal Logistics',
+        trackingNumber: d.trackingNumber || '',
+        vehicleNumber: d.vehicleNumber || '',
+        scheduledDate: d.scheduledDate || '',
+        responsible: d.responsible || 'Rohit Maurya',
+        sourceDocument: d.sourceDocument || '',
+        customerNotes: d.customerNotes || '',
+        moNumber: d.moNumber || '',
+        customer: d.customer,
+        warehouse: d.warehouse,
+        taxRate: d.taxRate || 18,
+        taxAmount: d.taxAmount || 0,
+        subtotal: d.subtotal || 0,
+        totalAmount: d.totalAmount || 0,
+        items: (d.items || []).map((item) => ({
+          id: item.id,
+          productId: item.productId,
+          productName: item.name,
+          name: item.name,
+          sku: item.sku || '',
+          qty: item.quantity,
+          quantity: item.quantity,
+          deliveredQty: item.deliveredQty || 0,
+          cost: item.unitCost,
+          unitCost: item.unitCost,
+          totalPrice: item.totalPrice,
+          unit: item.unit || 'Units'
+        }))
+      }));
+
+      setDeliveriesList(formatted);
+      setCustomers(resCustomers.data || []);
+      setWarehouses(resWarehouses.data || []);
+    } catch (err) {
+      console.error('Failed to load deliveries:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchDeliveries();
+  }, []);
+
   // Financial calculations
   const subtotal = useMemo(() => {
-    return delivery.items.reduce((acc, item) => acc + (parseFloat(item.totalPrice) || 0), 0);
+    return (delivery.items || []).reduce((acc, item) => acc + (parseFloat(item.totalPrice) || (parseFloat(item.qty || item.quantity || 0) * parseFloat(item.cost || item.unitCost || 0))), 0);
   }, [delivery.items]);
 
   const taxAmount = useMemo(() => {
@@ -65,11 +154,11 @@ export default function DeliveryPage() {
   }, [subtotal, taxAmount]);
 
   const totalUnits = useMemo(() => {
-    return delivery.items.reduce((acc, item) => acc + (parseFloat(item.qty) || 0), 0);
+    return (delivery.items || []).reduce((acc, item) => acc + (parseFloat(item.qty || item.quantity) || 0), 0);
   }, [delivery.items]);
 
   // Stage updates
-  const handleStatusChange = (newStatus) => {
+  const handleStatusChange = async (newStatus) => {
     const updated = {
       ...delivery,
       status: newStatus,
@@ -86,52 +175,162 @@ export default function DeliveryPage() {
     };
     setDelivery(updated);
     setDeliveriesList((prev) => prev.map((d) => (d.id === updated.id ? updated : d)));
+
+    if (delivery.id) {
+      try {
+        await deliveryApi.update(delivery.id, { status: newStatus });
+      } catch (e) {
+        console.warn(e);
+      }
+    }
     showToast(`Delivery status updated to ${newStatus.toUpperCase()}`);
   };
 
-  const handleMovementStatusChange = (newMovementStatus) => {
-    let correspondingStatus = delivery.status;
-    if (newMovementStatus === 'creation') correspondingStatus = 'draft';
-    else if (newMovementStatus === 'packing') correspondingStatus = 'ready';
-    else if (newMovementStatus === 'moving' || newMovementStatus === 'not_received') correspondingStatus = 'in_progress';
-    else if (newMovementStatus === 'delivered') correspondingStatus = 'done';
-
-    const updated = {
-      ...delivery,
-      movementStatus: newMovementStatus,
-      status: correspondingStatus
-    };
-    setDelivery(updated);
-    setDeliveriesList((prev) => prev.map((d) => (d.id === updated.id ? updated : d)));
-    showToast(`Dispatch tracking updated: ${newMovementStatus.replace('_', ' ')}`);
+  const handlePick = async () => {
+    if (!delivery.id) {
+      await handleSaveDelivery();
+      return;
+    }
+    try {
+      await deliveryApi.pick(delivery.id);
+      const updated = { ...delivery, status: 'in_progress', movementStatus: 'moving' };
+      setDelivery(updated);
+      showToast(`Delivery ${delivery.internalNumber} marked as In Progress (Picking Complete)`, 'success');
+      await fetchDeliveries();
+    } catch (err) {
+      showToast(err.message || 'Failed to record pick', 'error');
+    }
   };
 
-  // Top Action handlers
-  const handleValidate = () => {
-    if (delivery.items.length === 0) {
+  const handlePack = async () => {
+    if (!delivery.id) {
+      await handleSaveDelivery();
+      return;
+    }
+    try {
+      await deliveryApi.pack(delivery.id);
+      const updated = { ...delivery, status: 'ready', movementStatus: 'packing' };
+      setDelivery(updated);
+      showToast(`Delivery ${delivery.internalNumber} marked as Ready (Packing Complete)`, 'success');
+      await fetchDeliveries();
+    } catch (err) {
+      showToast(err.message || 'Failed to record pack', 'error');
+    }
+  };
+
+  const handleValidate = async () => {
+    if (!delivery.items || delivery.items.length === 0) {
       showToast('Please add at least one product before validating delivery!', 'error');
       return;
     }
-    if (!delivery.customer?.name) {
-      showToast('Please select a customer for delivery!', 'error');
-      return;
-    }
 
-    const updated = {
-      ...delivery,
-      status: 'done',
-      movementStatus: 'delivered'
-    };
-    setDelivery(updated);
-    setDeliveriesList((prev) => prev.map((d) => (d.id === updated.id ? updated : d)));
-    showToast(`Delivery ${delivery.internalNumber} validated & stock dispatched!`, 'success');
+    try {
+      if (delivery.isNew || !delivery.id) {
+        const payload = {
+          status: 'done',
+          scheduledDate: delivery.scheduledDate,
+          destination: delivery.to || delivery.destination || 'Customer Destination',
+          responsible: delivery.responsible,
+          carrier: delivery.carrier,
+          trackingNumber: delivery.trackingNumber,
+          vehicleNumber: delivery.vehicleNumber,
+          customerNotes: delivery.customerNotes,
+          subtotal,
+          taxRate: delivery.taxRate,
+          taxAmount,
+          totalAmount: grandTotal,
+          customerId: delivery.customer?.id || null,
+          warehouseId: delivery.warehouse?.id || null,
+          items: delivery.items.map((i) => ({
+            productId: i.productId || null,
+            name: i.productName || i.name,
+            sku: i.sku || null,
+            quantity: parseFloat(i.qty || i.quantity) || 1,
+            unitCost: parseFloat(i.cost || i.unitCost) || 0,
+            totalPrice: parseFloat(i.totalPrice) || 0,
+            unit: i.unit || 'Units'
+          }))
+        };
+        const created = await deliveryApi.create(payload);
+        const valRes = await deliveryApi.validate(created.data.id);
+        showToast(`Delivery ${valRes.data.reference} dispatched & stock decreased!`, 'success');
+        await fetchDeliveries();
+        setCurrentView('list');
+      } else {
+        const valRes = await deliveryApi.validate(delivery.id);
+        const updated = { ...delivery, status: 'done', movementStatus: 'delivered' };
+        setDelivery(updated);
+        showToast(`Delivery ${valRes.data.reference} dispatched & stock decreased successfully!`, 'success');
+        await fetchDeliveries();
+      }
+    } catch (err) {
+      showToast(err.message || 'Validation failed', 'error');
+    }
+  };
+
+  const handleSaveDelivery = async () => {
+    try {
+      const payload = {
+        status: delivery.status || 'draft',
+        scheduledDate: delivery.scheduledDate,
+        destination: delivery.to || delivery.destination || 'Customer Destination',
+        responsible: delivery.responsible || 'Rohit Maurya',
+        carrier: delivery.carrier || 'Internal Logistics',
+        trackingNumber: delivery.trackingNumber || '',
+        vehicleNumber: delivery.vehicleNumber || '',
+        customerNotes: delivery.customerNotes || '',
+        subtotal,
+        taxRate: delivery.taxRate,
+        taxAmount,
+        totalAmount: grandTotal,
+        customerId: delivery.customer?.id || null,
+        warehouseId: delivery.warehouse?.id || null,
+        items: delivery.items.map((i) => ({
+          productId: i.productId || null,
+          name: i.productName || i.name,
+          sku: i.sku || null,
+          quantity: parseFloat(i.qty || i.quantity) || 1,
+          unitCost: parseFloat(i.cost || i.unitCost) || 0,
+          totalPrice: parseFloat(i.totalPrice) || 0,
+          unit: i.unit || 'Units'
+        }))
+      };
+
+      if (delivery.isNew || !delivery.id) {
+        const res = await deliveryApi.create(payload);
+        showToast(`Delivery ${res.data.reference} created successfully!`);
+        await fetchDeliveries();
+        setCurrentView('list');
+      } else {
+        await deliveryApi.update(delivery.id, payload);
+        showToast(`Delivery ${delivery.internalNumber} updated successfully!`);
+        await fetchDeliveries();
+      }
+    } catch (err) {
+      showToast(err.message || 'Failed to save delivery', 'error');
+    }
+  };
+
+  const handleDeleteDelivery = async (id, ref) => {
+    if (window.confirm(`Are you sure you want to delete delivery order ${ref}?`)) {
+      try {
+        await deliveryApi.delete(id);
+        showToast(`Delivery order ${ref} deleted successfully`);
+        await fetchDeliveries();
+        if (delivery.id === id) {
+          setCurrentView('list');
+        }
+      } catch (err) {
+        showToast(err.message || 'Failed to delete delivery', 'error');
+      }
+    }
   };
 
   const handlePrint = () => {
     setIsPrintModalOpen(true);
   };
 
-  const handleCancelDelivery = () => {
+  const handleCancelDelivery = async () => {
     if (window.confirm('Are you sure you want to cancel this delivery order?')) {
       const updated = {
         ...delivery,
@@ -139,82 +338,98 @@ export default function DeliveryPage() {
       };
       setDelivery(updated);
       setDeliveriesList((prev) => prev.map((d) => (d.id === updated.id ? updated : d)));
-      showToast(`Delivery order ${delivery.internalNumber} marked as Cancelled`, 'info');
+      if (delivery.id) {
+        try {
+          await deliveryApi.update(delivery.id, { status: 'cancelled' });
+        } catch (e) {
+          console.warn(e);
+        }
+      }
+      showToast(`Delivery ${delivery.internalNumber} marked as Cancelled`, 'info');
     }
   };
 
+  // Open detail view for a selected delivery
   const handleSelectDelivery = (selected) => {
-    setDelivery(selected);
+    setDelivery({ ...selected, isNew: false });
     setCurrentView('detail');
   };
 
-  // Create new delivery with auto-increment ID format <Warehouse>/<Operation>/<ID> (e.g. WH/OUT/004)
+  // Create new delivery order draft
   const handleCreateNewDelivery = () => {
-    const nextId = deliveriesList.length + 1;
-    const newRef = generateDeliveryReference('WH', 'OUT', nextId);
+    const nextNumeric = deliveriesList.length + 1;
+    const nextRef = `WH/OUT/${String(nextNumeric).padStart(3, '0')}`;
 
     const newDel = {
-      id: `del-${Date.now()}`,
-      warehouseCode: 'WH',
-      operationCode: 'OUT',
-      numericId: nextId,
-      internalNumber: newRef,
-      from: 'WH/Stock/Dispatch Bay 1',
-      to: `${SAMPLE_CUSTOMERS[0].name} - ${SAMPLE_CUSTOMERS[0].city}`,
-      contact: `${SAMPLE_CUSTOMERS[0].contactPerson} (${SAMPLE_CUSTOMERS[0].phone})`,
-      sourceDocument: '',
-      customerReference: '',
-      createdOn: new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) + ' ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      scheduledDate: new Date().toISOString().split('T')[0],
-      responsible: DISPATCH_STAFF[0].name,
-      responsibleId: DISPATCH_STAFF[0].id,
-      status: 'draft',
-      movementStatus: 'creation',
-      shippingPolicy: 'As soon as possible',
-      carrier: 'BlueDart Express Cargo',
+      id: null,
+      isNew: true,
+      internalNumber: nextRef,
+      reference: nextRef,
+      from: warehouses[0]?.name || 'Central Stock Room',
+      to: customers[0]?.name || 'Customer / Consignee',
+      destination: customers[0]?.address || 'Direct Customer Delivery',
+      contact: customers[0] ? `${customers[0].contactPerson || ''} (${customers[0].phone || ''})` : 'Rohit Maurya',
+      carrier: 'BlueDart Express',
       trackingNumber: '',
       vehicleNumber: '',
-      warehouseLocation: 'WH/Stock/Dispatch Bay 1',
-      notes: '',
-      customer: SAMPLE_CUSTOMERS[0],
+      scheduledDate: new Date().toISOString().split('T')[0],
+      responsible: 'Rohit Maurya',
+      status: 'draft',
+      movementStatus: 'creation',
+      customerNotes: '',
+      customer: customers[0] || null,
+      warehouse: warehouses[0] || null,
       taxRate: 18,
       items: []
     };
 
-    setDeliveriesList([newDel, ...deliveriesList]);
     setDelivery(newDel);
     setCurrentView('detail');
-    showToast(`Created new delivery order ${newRef}`);
+    showToast(`Draft delivery ${nextRef} initialized`);
   };
 
   // Item modifications
   const handleAddProduct = (newProduct) => {
+    const qty = parseFloat(newProduct.qty) || 1;
+    const cost = parseFloat(newProduct.cost) || 0;
+    const item = {
+      id: `temp-${Date.now()}`,
+      productId: newProduct.productId || null,
+      productName: newProduct.productName,
+      name: newProduct.productName,
+      sku: newProduct.sku || '',
+      qty,
+      quantity: qty,
+      cost,
+      unitCost: cost,
+      totalPrice: qty * cost,
+      unit: newProduct.unit || 'Units'
+    };
+
     const updated = {
       ...delivery,
-      items: [...delivery.items, newProduct]
+      items: [...(delivery.items || []), item]
     };
     setDelivery(updated);
-    setDeliveriesList((prev) => prev.map((d) => (d.id === updated.id ? updated : d)));
     showToast(`Added ${newProduct.productName} to delivery`);
   };
 
   const handleRemoveProduct = (itemId) => {
     const updated = {
       ...delivery,
-      items: delivery.items.filter((item) => item.id !== itemId)
+      items: (delivery.items || []).filter((item) => item.id !== itemId)
     };
     setDelivery(updated);
-    setDeliveriesList((prev) => prev.map((d) => (d.id === updated.id ? updated : d)));
     showToast('Product item removed from delivery', 'info');
   };
 
   const handleItemFieldChange = (itemId, field, value) => {
-    const updatedItems = delivery.items.map((item) => {
+    const updatedItems = (delivery.items || []).map((item) => {
       if (item.id === itemId) {
         const up = { ...item, [field]: value };
-        if (field === 'cost' || field === 'qty') {
-          const cost = field === 'cost' ? parseFloat(value) || 0 : item.cost;
-          const qty = field === 'qty' ? parseFloat(value) || 0 : item.qty;
+        if (field === 'cost' || field === 'qty' || field === 'unitCost' || field === 'quantity') {
+          const cost = parseFloat(up.cost || up.unitCost) || 0;
+          const qty = parseFloat(up.qty || up.quantity) || 0;
           up.totalPrice = cost * qty;
         }
         return up;
@@ -224,27 +439,19 @@ export default function DeliveryPage() {
 
     const updated = { ...delivery, items: updatedItems };
     setDelivery(updated);
-    setDeliveriesList((prev) => prev.map((d) => (d.id === updated.id ? updated : d)));
   };
 
+  // Status step configuration
   const mainStages = [
     { key: 'draft', label: 'Draft' },
-    { key: 'in_progress', label: 'In Progress' },
-    { key: 'ready', label: 'Ready' },
-    { key: 'done', label: 'Done' }
-  ];
-
-  const movementOptions = [
-    { key: 'creation', label: 'Creation (Draft)', icon: FileText, color: 'text-slate-600 bg-slate-100' },
-    { key: 'packing', label: 'Packing (Staged)', icon: Package, color: 'text-purple-700 bg-purple-50 border-purple-200' },
-    { key: 'moving', label: 'Moving (Out for Delivery)', icon: Truck, color: 'text-blue-700 bg-blue-50 border-blue-200' },
-    { key: 'not_received', label: 'Not Received (Transit Hold)', icon: AlertCircle, color: 'text-amber-700 bg-amber-50 border-amber-200' },
-    { key: 'delivered', label: 'Done (Delivered)', icon: CheckCircle2, color: 'text-emerald-700 bg-emerald-50 border-emerald-200' }
+    { key: 'in_progress', label: 'In Progress (Picked)' },
+    { key: 'ready', label: 'Ready (Packed)' },
+    { key: 'done', label: 'Done (Dispatched)' }
   ];
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans antialiased pb-24">
-      <Navbar activePage="deliveries" />
+      <Navbar activePage="delivery" />
 
       {/* Toast Notification */}
       {toastMessage && (
@@ -308,7 +515,7 @@ export default function DeliveryPage() {
                     Deliveries
                   </button>
                   <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
-                  <span className="font-semibold text-slate-900 font-mono">{delivery.internalNumber}</span>
+                  <span className="font-semibold text-slate-900 font-mono">{delivery.internalNumber || delivery.reference}</span>
                   {delivery.status === 'cancelled' && (
                     <span className="ml-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-rose-100 text-rose-700 uppercase">
                       Cancelled
@@ -358,8 +565,10 @@ export default function DeliveryPage() {
           /* DEFAULT: Land on List View */
           <DeliveriesListView
             deliveries={deliveriesList}
+            loading={loading}
             onSelectDelivery={handleSelectDelivery}
             onCreateNew={handleCreateNewDelivery}
+            onDeleteDelivery={handleDeleteDelivery}
             onPrintDelivery={(d) => {
               setDelivery(d);
               setIsPrintModalOpen(true);
@@ -373,8 +582,34 @@ export default function DeliveryPage() {
             <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-4 sm:p-5">
               <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
                 
-                {/* Top Bar Options (Left): Validate, Print, Cancel */}
+                {/* Top Bar Options (Left): Pick, Pack, Validate (Dispatch), Save, Print, Cancel, Delete */}
                 <div className="flex flex-wrap items-center gap-2.5">
+                  <button
+                    onClick={handlePick}
+                    disabled={delivery.status === 'in_progress' || delivery.status === 'ready' || delivery.status === 'done' || delivery.status === 'cancelled'}
+                    className={`px-3.5 py-2 text-xs sm:text-sm font-semibold rounded-xl border flex items-center gap-1.5 transition-all cursor-pointer ${
+                      delivery.status === 'in_progress' || delivery.status === 'ready' || delivery.status === 'done'
+                        ? 'bg-blue-50 text-blue-700 border-blue-200 opacity-80 cursor-default'
+                        : 'bg-blue-600 hover:bg-blue-700 text-white border-transparent'
+                    }`}
+                  >
+                    <Box className="w-4 h-4" />
+                    1. Pick
+                  </button>
+
+                  <button
+                    onClick={handlePack}
+                    disabled={delivery.status === 'ready' || delivery.status === 'done' || delivery.status === 'cancelled'}
+                    className={`px-3.5 py-2 text-xs sm:text-sm font-semibold rounded-xl border flex items-center gap-1.5 transition-all cursor-pointer ${
+                      delivery.status === 'ready' || delivery.status === 'done'
+                        ? 'bg-purple-50 text-purple-700 border-purple-200 opacity-80 cursor-default'
+                        : 'bg-purple-600 hover:bg-purple-700 text-white border-transparent'
+                    }`}
+                  >
+                    <Package className="w-4 h-4" />
+                    2. Pack
+                  </button>
+
                   <button
                     onClick={handleValidate}
                     disabled={delivery.status === 'done' || delivery.status === 'cancelled'}
@@ -385,7 +620,15 @@ export default function DeliveryPage() {
                     }`}
                   >
                     <CheckCircle2 className="w-4 h-4" />
-                    {delivery.status === 'done' ? 'Validated & Delivered' : 'Validate'}
+                    {delivery.status === 'done' ? 'Dispatched & Decreased' : '3. Validate & Dispatch'}
+                  </button>
+
+                  <button
+                    onClick={handleSaveDelivery}
+                    className="px-4 py-2 text-xs sm:text-sm font-semibold text-slate-800 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-xl shadow-xs flex items-center gap-2 transition-colors cursor-pointer active:scale-98"
+                  >
+                    <Save className="w-4 h-4 text-slate-600" />
+                    Save Draft
                   </button>
 
                   <button
@@ -393,7 +636,7 @@ export default function DeliveryPage() {
                     className="px-4 py-2 text-xs sm:text-sm font-medium text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 rounded-xl shadow-xs flex items-center gap-2 transition-colors cursor-pointer active:scale-98"
                   >
                     <Printer className="w-4 h-4 text-slate-600" />
-                    Print Delivery Slip
+                    Print Challan
                   </button>
 
                   <button
@@ -404,13 +647,23 @@ export default function DeliveryPage() {
                     <XCircle className="w-4 h-4" />
                     Cancel
                   </button>
+
+                  {delivery.id && (
+                    <button
+                      onClick={() => handleDeleteDelivery(delivery.id, delivery.internalNumber || delivery.reference)}
+                      className="px-3.5 py-2 text-xs sm:text-sm font-medium text-rose-700 hover:bg-rose-100/70 border border-rose-300 rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      Delete
+                    </button>
+                  )}
                 </div>
 
-                {/* Status Pipeline (Right): Draft -> In Progress -> Ready -> Done */}
+                {/* Status Pipeline (Right) */}
                 <div className="flex items-center overflow-x-auto pb-1 lg:pb-0">
                   <div className="inline-flex bg-slate-100/80 p-1 rounded-xl border border-slate-200 text-xs">
                     {mainStages.map((stage) => {
-                      const isActive = delivery.status === stage.key;
+                      const isActive = (delivery.status || 'draft') === stage.key;
                       const isDone =
                         delivery.status === 'done' ||
                         (delivery.status === 'ready' && stage.key === 'draft') ||
@@ -446,345 +699,232 @@ export default function DeliveryPage() {
                 </div>
 
               </div>
-
-              {/* Intermediate Status Tracking Pipeline */}
-              <div className="mt-4 pt-4 border-t border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-3">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                    Intermediate Dispatch Tracking:
-                  </span>
-                </div>
-
-                <div className="flex flex-wrap items-center gap-1.5">
-                  {movementOptions.map((opt) => {
-                    const isSelected = delivery.movementStatus === opt.key;
-                    const IconComponent = opt.icon;
-                    return (
-                      <button
-                        key={opt.key}
-                        type="button"
-                        onClick={() => handleMovementStatusChange(opt.key)}
-                        className={`px-2.5 py-1 text-xs rounded-lg border transition-all flex items-center gap-1.5 cursor-pointer ${
-                          isSelected
-                            ? `${opt.color} font-semibold ring-1 ring-slate-400/40 shadow-xs`
-                            : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-slate-700'
-                        }`}
-                      >
-                        <IconComponent className="w-3.5 h-3.5" />
-                        <span>{opt.label}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
             </div>
 
-            {/* Main Delivery Sheet Card */}
+            {/* Document Details & Product Lines */}
             <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
-              
-              {/* Document Header Info Section */}
-              <div className="p-6 sm:p-8 border-b border-slate-100">
-                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-slate-100">
+              <div className="p-6 space-y-6">
+                
+                {/* Header Reference */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-6 border-b border-slate-100 gap-4">
                   <div>
-                    <span className="text-xs font-semibold uppercase tracking-wider text-emerald-600 font-mono">
-                      Outbound Delivery Order Reference
+                    <span className="text-xs font-semibold uppercase tracking-wider text-slate-400 font-mono">
+                      Outward Delivery Order
                     </span>
-                    <div className="flex items-center gap-3 mt-1">
-                      <input
-                        type="text"
-                        value={delivery.internalNumber}
-                        onChange={(e) => setDelivery({ ...delivery, internalNumber: e.target.value })}
-                        className="text-2xl sm:text-3xl font-bold font-mono text-slate-900 tracking-tight bg-transparent border-b border-dashed border-slate-300 hover:border-slate-400 focus:border-emerald-600 focus:outline-none px-1"
-                        title="Format: <Warehouse>/<Operation>/<ID>"
-                      />
-                      <span
-                        className={`px-2.5 py-1 rounded-full text-xs font-semibold capitalize ${
-                          delivery.status === 'done'
-                            ? 'bg-emerald-100 text-emerald-800'
-                            : delivery.status === 'ready'
-                            ? 'bg-purple-100 text-purple-800'
-                            : delivery.status === 'in_progress'
-                            ? 'bg-blue-100 text-blue-800'
-                            : 'bg-slate-100 text-slate-700'
-                        }`}
-                      >
-                        {delivery.status.replace('_', ' ')}
-                      </span>
-                    </div>
+                    <h2 className="text-2xl sm:text-3xl font-bold font-mono text-slate-900 mt-1">
+                      {delivery.internalNumber || delivery.reference}
+                    </h2>
                   </div>
-
-                  {/* Quick Info Stamps */}
-                  <div className="flex items-center gap-3 text-xs text-slate-500 bg-slate-50 p-3 rounded-xl border border-slate-200">
-                    <div className="flex items-center gap-1.5">
-                      <Clock className="w-3.5 h-3.5 text-slate-400" />
-                      <span>Created: <strong className="text-slate-700">{delivery.createdOn}</strong></span>
+                  <div className="flex items-center gap-3">
+                    <div className="text-right">
+                      <span className="text-xs text-slate-400 block font-medium">Scheduled Dispatch</span>
+                      <span className="text-sm font-semibold text-slate-800 font-mono">
+                        {delivery.scheduledDate || 'Today'}
+                      </span>
                     </div>
                   </div>
                 </div>
 
                 {/* Form Fields Grid */}
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 pt-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   
-                  {/* Deliver To (Customer) */}
+                  {/* Source Warehouse */}
                   <div className="space-y-1.5">
-                    <div className="flex items-center justify-between">
-                      <label className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
-                        <Building2 className="w-3.5 h-3.5 text-slate-400" />
-                        Deliver To (Customer) *
-                      </label>
+                    <label className="block text-xs font-semibold text-slate-700">
+                      Source Warehouse (From) <span className="text-rose-500">*</span>
+                    </label>
+                    <select
+                      value={delivery.warehouse?.id || ''}
+                      onChange={(e) => {
+                        const wh = warehouses.find((w) => w.id === parseInt(e.target.value));
+                        setDelivery({
+                          ...delivery,
+                          warehouse: wh || null,
+                          from: wh ? wh.name : 'Central Stock Room'
+                        });
+                      }}
+                      className="w-full px-3.5 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:bg-white focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all font-medium text-slate-800"
+                    >
+                      {warehouses.map((w) => (
+                        <option key={w.id} value={w.id}>
+                          {w.name} ({w.shortcode || 'WH'})
+                        </option>
+                      ))}
+                      {warehouses.length === 0 && (
+                        <option value="">Central Stock Room (Default)</option>
+                      )}
+                    </select>
+                  </div>
+
+                  {/* Customer / Consignee */}
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-semibold text-slate-700">
+                      Customer / Consignee (To) <span className="text-rose-500">*</span>
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={delivery.to || delivery.customer?.name || ''}
+                        onChange={(e) => setDelivery({ ...delivery, to: e.target.value })}
+                        placeholder="Select or enter customer name..."
+                        className="w-full px-3.5 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:bg-white focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all font-medium text-slate-800"
+                      />
                       <button
                         type="button"
                         onClick={() => setIsCustomerModalOpen(true)}
-                        className="text-xs text-emerald-600 hover:text-emerald-700 font-medium hover:underline flex items-center gap-1 cursor-pointer"
+                        className="px-3 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-xl text-xs font-semibold transition-colors flex items-center gap-1.5 cursor-pointer"
+                        title="Pick from customer directory"
                       >
-                        Change / Edit
+                        <User className="w-4 h-4" />
+                        Pick
                       </button>
                     </div>
-                    
-                    <div
-                      onClick={() => setIsCustomerModalOpen(true)}
-                      className="p-3 bg-slate-50 hover:bg-slate-100/80 border border-slate-200 rounded-xl cursor-pointer transition-colors group"
-                    >
-                      <p className="text-sm font-semibold text-slate-900 group-hover:text-emerald-600 transition-colors">
-                        {delivery.customer?.name || 'Click to select customer'}
-                      </p>
-                      <p className="text-xs text-slate-500 line-clamp-1 mt-0.5">
-                        {delivery.customer?.shippingAddress || 'No shipping address set'}
-                      </p>
-                      <div className="mt-2 flex items-center gap-2 text-[11px] text-slate-500 font-mono">
-                        <span className="bg-white px-1.5 py-0.5 rounded border border-slate-200">
-                          GST: {delivery.customer?.gstNumber || 'N/A'}
-                        </span>
-                        <span>Ph: {delivery.customer?.phone || 'N/A'}</span>
-                      </div>
-                    </div>
                   </div>
 
-                  {/* Scheduled Delivery Date & Responsible */}
-                  <div className="space-y-4">
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                        Scheduled Delivery Date
-                      </label>
-                      <div className="relative">
-                        <Calendar className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                        <input
-                          type="date"
-                          value={delivery.scheduledDate}
-                          onChange={(e) => setDelivery({ ...delivery, scheduledDate: e.target.value })}
-                          className="w-full pl-9 pr-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:bg-white focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all font-medium text-slate-800"
-                        />
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                        Dispatch Responsible
-                      </label>
-                      <div className="relative">
-                        <User className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                        <select
-                          value={delivery.responsible}
-                          onChange={(e) => setDelivery({ ...delivery, responsible: e.target.value })}
-                          className="w-full pl-9 pr-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:bg-white focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all text-slate-800"
-                        >
-                          {DISPATCH_STAFF.map((staff) => (
-                            <option key={staff.id} value={staff.name}>
-                              {staff.name} ({staff.role})
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Source Document & From Location */}
-                  <div className="space-y-4">
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                        Source Document / Sale Order Ref
-                      </label>
-                      <div className="relative">
-                        <FileText className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                        <input
-                          type="text"
-                          placeholder="e.g. SO-2026-0812"
-                          value={delivery.sourceDocument}
-                          onChange={(e) => setDelivery({ ...delivery, sourceDocument: e.target.value })}
-                          className="w-full pl-9 pr-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:bg-white focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all font-mono text-slate-800"
-                        />
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                        From (Warehouse Location)
-                      </label>
-                      <input
-                        type="text"
-                        value={delivery.warehouseLocation}
-                        onChange={(e) => setDelivery({ ...delivery, warehouseLocation: e.target.value, from: e.target.value })}
-                        className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:bg-white focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all text-slate-800 font-mono text-xs"
-                      />
-                    </div>
-                  </div>
-
-                </div>
-
-                {/* Carrier & Tracking details card */}
-                <div className="mt-6 p-4 rounded-xl bg-slate-50 border border-slate-200/80 grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
-                  <div>
-                    <span className="text-slate-400 block font-semibold">Carrier / Transporter:</span>
+                  {/* Destination Address */}
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-semibold text-slate-700">
+                      Destination Address
+                    </label>
                     <input
                       type="text"
-                      value={delivery.carrier}
+                      placeholder="Delivery site / address..."
+                      value={delivery.destination || ''}
+                      onChange={(e) => setDelivery({ ...delivery, destination: e.target.value })}
+                      className="w-full px-3.5 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:bg-white font-medium text-slate-800"
+                    />
+                  </div>
+
+                  {/* Scheduled Dispatch Date */}
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-semibold text-slate-700">
+                      Scheduled Date
+                    </label>
+                    <input
+                      type="date"
+                      value={delivery.scheduledDate || ''}
+                      onChange={(e) => setDelivery({ ...delivery, scheduledDate: e.target.value })}
+                      className="w-full px-3.5 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:bg-white focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all font-medium text-slate-800"
+                    />
+                  </div>
+
+                  {/* Carrier Logistics */}
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-semibold text-slate-700">
+                      Carrier / Transporter
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. BlueDart Express, VRL Logistics"
+                      value={delivery.carrier || ''}
                       onChange={(e) => setDelivery({ ...delivery, carrier: e.target.value })}
-                      className="mt-1 font-semibold text-slate-800 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 w-full focus:outline-none focus:border-emerald-500"
+                      className="w-full px-3.5 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:bg-white font-medium text-slate-800"
                     />
                   </div>
-                  <div>
-                    <span className="text-slate-400 block font-semibold">Tracking / AWB Number:</span>
+
+                  {/* Tracking / Vehicle Number */}
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-semibold text-slate-700">
+                      Tracking / Vehicle Number
+                    </label>
                     <input
                       type="text"
-                      value={delivery.trackingNumber}
+                      placeholder="e.g. TRK-881920 or MH-12-AB-9921"
+                      value={delivery.trackingNumber || ''}
                       onChange={(e) => setDelivery({ ...delivery, trackingNumber: e.target.value })}
-                      placeholder="e.g. BD-EXP-8891042"
-                      className="mt-1 font-mono text-slate-800 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 w-full focus:outline-none focus:border-emerald-500"
+                      className="w-full px-3.5 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:bg-white font-mono text-slate-800"
                     />
                   </div>
-                  <div>
-                    <span className="text-slate-400 block font-semibold">Dispatch Vehicle Number:</span>
-                    <input
-                      type="text"
-                      value={delivery.vehicleNumber}
-                      onChange={(e) => setDelivery({ ...delivery, vehicleNumber: e.target.value })}
-                      placeholder="e.g. MH-12-QX-4890"
-                      className="mt-1 font-mono text-slate-800 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 w-full focus:outline-none focus:border-emerald-500"
-                    />
-                  </div>
-                </div>
-              </div>
 
-              {/* Product / Goods Details Section */}
-              <div className="p-6 sm:p-8">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
-                  <div>
-                    <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                      <Package className="w-4 h-4 text-emerald-600" />
-                      Dispatched Products & Stock Lines
-                    </h3>
-                    <p className="text-xs text-slate-500">
-                      Check items to deliver, verify demand quantities and pricing.
-                    </p>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() => setIsAddProductOpen(true)}
-                    className="px-4 py-2 text-xs sm:text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 active:scale-98 rounded-xl shadow-xs flex items-center gap-2 transition-all cursor-pointer self-start sm:self-auto"
-                  >
-                    <Plus className="w-4 h-4" />
-                    Add New Product
-                  </button>
                 </div>
 
-                {/* Goods Details Table */}
-                <div className="border border-slate-200 rounded-xl overflow-hidden shadow-2xs">
-                  <div className="overflow-x-auto">
+                {/* Product Items Table */}
+                <div className="pt-6 border-t border-slate-100">
+                  <div className="flex items-center justify-between mb-3">
+                    <div>
+                      <h3 className="text-base font-bold text-slate-900">Dispatched Products & Materials</h3>
+                      <p className="text-xs text-slate-500">Items to pick, pack, and ship to the customer</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setIsAddProductOpen(true)}
+                      className="px-3 py-1.5 text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      Add Product Line
+                    </button>
+                  </div>
+
+                  <div className="overflow-x-auto rounded-xl border border-slate-200">
                     <table className="w-full text-left text-xs sm:text-sm border-collapse">
                       <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200">
                         <tr>
-                          <th className="py-3 px-3.5 w-10 text-center text-slate-400">#</th>
-                          <th className="py-3 px-3.5 min-w-[220px]">Product</th>
-                          <th className="py-3 px-3.5 w-32 text-right">Price (₹)</th>
-                          <th className="py-3 px-3.5 w-28 text-center">Unit</th>
-                          <th className="py-3 px-3.5 w-28 text-right">Qty</th>
-                          <th className="py-3 px-3.5 w-36 text-right font-semibold">Total Price</th>
-                          <th className="py-3 px-2 w-12 text-center"></th>
+                          <th className="py-2.5 px-3">Product Name</th>
+                          <th className="py-2.5 px-3 w-32">SKU</th>
+                          <th className="py-2.5 px-3 w-28 text-right">Quantity</th>
+                          <th className="py-2.5 px-3 w-24">Unit</th>
+                          <th className="py-2.5 px-3 w-32 text-right">Unit Price (₹)</th>
+                          <th className="py-2.5 px-3 w-32 text-right">Total Price (₹)</th>
+                          <th className="py-2.5 px-2 w-10"></th>
                         </tr>
                       </thead>
 
                       <tbody className="divide-y divide-slate-100 bg-white">
-                        {delivery.items.length === 0 ? (
+                        {(!delivery.items || delivery.items.length === 0) ? (
                           <tr>
-                            <td colSpan="7" className="py-12 text-center text-slate-400">
-                              <Package className="w-10 h-10 mx-auto text-slate-300 mb-2" />
-                              <p className="font-medium text-slate-600">No goods added for delivery</p>
-                              <p className="text-xs text-slate-400 mt-1">
-                                Click <strong className="text-emerald-600">Add New Product</strong> above to select items.
-                              </p>
+                            <td colSpan="7" className="py-8 text-center text-slate-400">
+                              <Package className="w-8 h-8 mx-auto text-slate-300 mb-1" />
+                              <p className="font-medium text-slate-600 text-xs">No products in this delivery order</p>
+                              <button
+                                type="button"
+                                onClick={() => setIsAddProductOpen(true)}
+                                className="text-xs font-semibold text-emerald-600 hover:underline mt-1 inline-block cursor-pointer"
+                              >
+                                + Add First Item
+                              </button>
                             </td>
                           </tr>
                         ) : (
-                          delivery.items.map((item, index) => (
-                            <tr key={item.id} className="hover:bg-slate-50/70 transition-colors group">
-                              <td className="py-3 px-3.5 text-center text-slate-400 font-mono text-xs">
-                                {index + 1}
+                          delivery.items.map((item) => (
+                            <tr key={item.id} className="hover:bg-slate-50/60 transition-colors">
+                              <td className="py-2.5 px-3 font-medium text-slate-800">
+                                {item.productName || item.name}
                               </td>
-
-                              <td className="py-3 px-3.5">
-                                <input
-                                  type="text"
-                                  value={item.productName}
-                                  onChange={(e) => handleItemFieldChange(item.id, 'productName', e.target.value)}
-                                  className="font-medium text-slate-900 w-full bg-transparent hover:bg-white focus:bg-white border border-transparent hover:border-slate-200 focus:border-emerald-500 rounded px-1.5 py-0.5 focus:outline-none transition-colors"
-                                />
-                                <div className="text-[11px] text-slate-400 font-mono px-1.5">
-                                  SKU: {item.sku}
-                                </div>
+                              <td className="py-2.5 px-3 font-mono text-xs text-slate-500">
+                                {item.sku || '—'}
                               </td>
-
-                              <td className="py-3 px-3.5 text-right">
-                                <input
-                                  type="number"
-                                  min="0"
-                                  step="0.01"
-                                  value={item.cost}
-                                  onChange={(e) => handleItemFieldChange(item.id, 'cost', e.target.value)}
-                                  className="w-full text-right font-mono font-medium text-slate-800 bg-slate-50 group-hover:bg-white border border-slate-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                                />
-                              </td>
-
-                              <td className="py-3 px-3.5 text-center">
-                                <select
-                                  value={item.unit}
-                                  onChange={(e) => handleItemFieldChange(item.id, 'unit', e.target.value)}
-                                  className="w-full text-center text-xs bg-slate-50 group-hover:bg-white border border-slate-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500 text-slate-700"
-                                >
-                                  <option value="Units">Units</option>
-                                  <option value="Pcs">Pcs</option>
-                                  <option value="Kg">Kg</option>
-                                  <option value="Box">Box</option>
-                                  <option value="Cartridge">Cartridge</option>
-                                  <option value="Drum">Drum</option>
-                                  <option value="Liters">Liters</option>
-                                  <option value="Meters">Meters</option>
-                                </select>
-                              </td>
-
-                              <td className="py-3 px-3.5 text-right">
+                              <td className="py-2.5 px-3 text-right">
                                 <input
                                   type="number"
                                   min="1"
-                                  step="1"
-                                  value={item.qty}
+                                  value={item.qty || item.quantity || 1}
                                   onChange={(e) => handleItemFieldChange(item.id, 'qty', e.target.value)}
-                                  className="w-full text-right font-bold text-slate-900 bg-slate-50 group-hover:bg-white border border-slate-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                                  className="w-20 px-2 py-1 text-right text-xs bg-slate-50 border border-slate-200 rounded font-semibold text-slate-800"
                                 />
                               </td>
-
-                              <td className="py-3 px-3.5 text-right font-semibold font-mono text-slate-900">
-                                ₹{(parseFloat(item.totalPrice) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              <td className="py-2.5 px-3 text-slate-600 text-xs">
+                                {item.unit || 'Units'}
                               </td>
-
-                              <td className="py-3 px-2 text-center">
+                              <td className="py-2.5 px-3 text-right font-mono text-slate-700">
+                                <input
+                                  type="number"
+                                  min="0"
+                                  value={item.cost || item.unitCost || 0}
+                                  onChange={(e) => handleItemFieldChange(item.id, 'cost', e.target.value)}
+                                  className="w-24 px-2 py-1 text-right text-xs bg-slate-50 border border-slate-200 rounded font-mono text-slate-800"
+                                />
+                              </td>
+                              <td className="py-2.5 px-3 text-right font-mono font-bold text-slate-900">
+                                ₹{(item.totalPrice || (parseFloat(item.qty || item.quantity || 1) * parseFloat(item.cost || item.unitCost || 0))).toLocaleString()}
+                              </td>
+                              <td className="py-2.5 px-2 text-center">
                                 <button
                                   type="button"
                                   onClick={() => handleRemoveProduct(item.id)}
-                                  className="p-1 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
-                                  title="Delete row"
+                                  className="p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                                  title="Remove item"
                                 >
-                                  <Trash2 className="w-4 h-4" />
+                                  <Trash2 className="w-3.5 h-3.5" />
                                 </button>
                               </td>
                             </tr>
@@ -795,37 +935,21 @@ export default function DeliveryPage() {
                   </div>
                 </div>
 
-                {/* Bottom Row: Notes + Financial Summary Card */}
+                {/* Bottom Row: Notes & Summary */}
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 mt-6 items-start">
-                  
-                  {/* Left Column: Notes & Remarks */}
-                  <div className="lg:col-span-7 space-y-4">
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                        Delivery Instructions & Gate Pass Notes
-                      </label>
-                      <textarea
-                        rows="3"
-                        value={delivery.notes}
-                        onChange={(e) => setDelivery({ ...delivery, notes: e.target.value })}
-                        placeholder="Enter dispatch notes, customer gate instructions, special transport handling..."
-                        className="w-full p-3 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:bg-white focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all text-slate-700"
-                      />
-                    </div>
-
-                    <div className="flex items-center gap-3 text-xs text-slate-500">
-                      <div className="flex items-center gap-1">
-                        <Layers className="w-3.5 h-3.5 text-slate-400" />
-                        <span>Total Unique Lines: <strong className="text-slate-800">{delivery.items.length}</strong></span>
-                      </div>
-                      <span>•</span>
-                      <div>
-                        <span>Total Quantity: <strong className="text-slate-800">{totalUnits} units</strong></span>
-                      </div>
-                    </div>
+                  <div className="lg:col-span-7 space-y-3">
+                    <label className="block text-xs font-semibold text-slate-700">
+                      Customer Delivery Instructions & Gate Pass Notes
+                    </label>
+                    <textarea
+                      rows="3"
+                      value={delivery.customerNotes || ''}
+                      onChange={(e) => setDelivery({ ...delivery, customerNotes: e.target.value })}
+                      placeholder="Special handling, pallet numbers, driver instructions..."
+                      className="w-full p-3 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:bg-white"
+                    />
                   </div>
 
-                  {/* Right Column: Financial Summary Card */}
                   <div className="lg:col-span-5 bg-slate-50 rounded-2xl border border-slate-200 p-5 space-y-3">
                     <h4 className="text-xs font-bold uppercase tracking-wider text-slate-600">
                       Financial Summary
@@ -833,44 +957,27 @@ export default function DeliveryPage() {
 
                     <div className="space-y-2 text-xs sm:text-sm">
                       <div className="flex justify-between text-slate-600">
-                        <span>Untaxed Amount (Subtotal):</span>
+                        <span>Subtotal:</span>
                         <span className="font-semibold text-slate-800 font-mono">
                           ₹{subtotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </span>
                       </div>
 
                       <div className="flex items-center justify-between text-slate-600">
-                        <div className="flex items-center gap-1.5">
-                          <span>GST Rate:</span>
-                          <select
-                            value={delivery.taxRate}
-                            onChange={(e) => setDelivery({ ...delivery, taxRate: parseFloat(e.target.value) || 0 })}
-                            className="text-xs bg-white border border-slate-200 rounded px-1.5 py-0.5 focus:outline-none font-medium"
-                          >
-                            <option value="0">0%</option>
-                            <option value="5">5%</option>
-                            <option value="12">12%</option>
-                            <option value="18">18% (Standard)</option>
-                            <option value="28">28%</option>
-                          </select>
-                        </div>
+                        <span>GST (18%):</span>
                         <span className="font-semibold text-slate-800 font-mono">
                           ₹{taxAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </span>
                       </div>
 
                       <div className="pt-3 border-t border-slate-200 flex justify-between items-baseline">
-                        <div>
-                          <span className="text-sm font-bold text-slate-900 block">Total Price:</span>
-                          <span className="text-[11px] text-slate-500">Including all applicable taxes</span>
-                        </div>
-                        <span className="text-lg sm:text-xl font-bold font-mono text-emerald-700">
+                        <span className="text-sm font-bold text-slate-900">Total Order Value:</span>
+                        <span className="text-lg font-bold font-mono text-emerald-700">
                           ₹{grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </span>
                       </div>
                     </div>
                   </div>
-
                 </div>
 
               </div>
@@ -891,14 +998,13 @@ export default function DeliveryPage() {
         onClose={() => setIsCustomerModalOpen(false)}
         currentCustomer={delivery.customer}
         onSelectCustomer={(selectedCust) => {
-          const updated = {
+          setDelivery({
             ...delivery,
             customer: selectedCust,
-            to: `${selectedCust.name} - ${selectedCust.city}`,
-            contact: `${selectedCust.contactPerson} (${selectedCust.phone})`
-          };
-          setDelivery(updated);
-          setDeliveriesList((prev) => prev.map((d) => (d.id === updated.id ? updated : d)));
+            to: selectedCust.name,
+            destination: selectedCust.address || selectedCust.name,
+            contact: `${selectedCust.contactPerson || ''} (${selectedCust.phone || ''})`
+          });
           showToast(`Customer set to ${selectedCust.name}`);
         }}
       />

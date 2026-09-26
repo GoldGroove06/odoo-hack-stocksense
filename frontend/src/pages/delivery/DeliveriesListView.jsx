@@ -16,14 +16,17 @@ import {
   ChevronRight,
   Filter,
   Eye,
-  Printer
+  Printer,
+  Trash2
 } from 'lucide-react';
 
 export default function DeliveriesListView({
-  deliveries,
+  deliveries = [],
   onSelectDelivery,
   onCreateNew,
-  onPrintDelivery
+  onPrintDelivery,
+  onDeleteDelivery,
+  loading = false
 }) {
   const [viewMode, setViewMode] = useState('list'); // 'list' | 'kanban'
   const [searchQuery, setSearchQuery] = useState('');
@@ -39,11 +42,11 @@ export default function DeliveriesListView({
       // Search query (Reference & Contacts)
       if (searchQuery.trim()) {
         const query = searchQuery.toLowerCase();
-        const matchesRef = del.internalNumber.toLowerCase().includes(query);
+        const matchesRef = (del.internalNumber || del.reference || '').toLowerCase().includes(query);
         const matchesContact = (del.contact || '').toLowerCase().includes(query);
         const matchesCustomer = (del.customer?.name || '').toLowerCase().includes(query);
         const matchesContactPerson = (del.customer?.contactPerson || '').toLowerCase().includes(query);
-        const matchesTo = (del.to || '').toLowerCase().includes(query);
+        const matchesTo = (del.to || del.destination || '').toLowerCase().includes(query);
         return matchesRef || matchesContact || matchesCustomer || matchesContactPerson || matchesTo;
       }
       return true;
@@ -53,9 +56,9 @@ export default function DeliveriesListView({
   // Kanban column buckets
   const kanbanColumns = [
     { key: 'draft', title: 'Draft', color: 'border-slate-300 bg-slate-50/50' },
-    { key: 'in_progress', title: 'In Progress', color: 'border-blue-300 bg-blue-50/30' },
-    { key: 'ready', title: 'Ready (Packing)', color: 'border-purple-300 bg-purple-50/30' },
-    { key: 'done', title: 'Done (Delivered)', color: 'border-emerald-300 bg-emerald-50/30' }
+    { key: 'in_progress', title: 'In Progress (Picked)', color: 'border-blue-300 bg-blue-50/30' },
+    { key: 'ready', title: 'Ready (Packed)', color: 'border-purple-300 bg-purple-50/30' },
+    { key: 'done', title: 'Done (Dispatched)', color: 'border-emerald-300 bg-emerald-50/30' }
   ];
 
   return (
@@ -103,8 +106,8 @@ export default function DeliveriesListView({
             <option value="ALL">All Statuses</option>
             <option value="draft">Draft</option>
             <option value="in_progress">In Progress</option>
-            <option value="ready">Ready</option>
-            <option value="done">Done</option>
+            <option value="ready">Ready (Packed)</option>
+            <option value="done">Done (Dispatched)</option>
             <option value="cancelled">Cancelled</option>
           </select>
 
@@ -148,23 +151,40 @@ export default function DeliveriesListView({
               <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200">
                 <tr>
                   <th className="py-3.5 px-4 min-w-[140px]">Reference</th>
-                  <th className="py-3.5 px-4 min-w-[180px]">From (Warehouse Location)</th>
-                  <th className="py-3.5 px-4 min-w-[200px]">To (Customer Destination)</th>
+                  <th className="py-3.5 px-4 min-w-[180px]">From (Warehouse)</th>
+                  <th className="py-3.5 px-4 min-w-[200px]">To (Customer / Destination)</th>
                   <th className="py-3.5 px-4 min-w-[180px]">Contact</th>
                   <th className="py-3.5 px-4 min-w-[130px]">Schedule Date</th>
                   <th className="py-3.5 px-4 min-w-[140px]">Carrier / Tracking</th>
                   <th className="py-3.5 px-4 w-28 text-center">Status</th>
-                  <th className="py-3.5 px-2 w-12 text-center"></th>
+                  <th className="py-3.5 px-4 w-24 text-center">Actions</th>
                 </tr>
               </thead>
 
               <tbody className="divide-y divide-slate-100 bg-white">
-                {filteredDeliveries.length === 0 ? (
+                {loading ? (
                   <tr>
                     <td colSpan="8" className="py-12 text-center text-slate-400">
-                      <Package className="w-10 h-10 mx-auto text-slate-300 mb-2" />
-                      <p className="font-medium text-slate-600">No deliveries found</p>
-                      <p className="text-xs text-slate-400 mt-1">Try adjusting your search query or click "New Delivery".</p>
+                      <div className="animate-spin w-8 h-8 border-4 border-emerald-600 border-t-transparent rounded-full mx-auto mb-3" />
+                      <p className="font-medium text-slate-600">Loading delivery orders...</p>
+                    </td>
+                  </tr>
+                ) : filteredDeliveries.length === 0 ? (
+                  <tr>
+                    <td colSpan="8" className="py-16 text-center text-slate-400">
+                      <Truck className="w-12 h-12 mx-auto text-slate-300 mb-3" />
+                      <p className="font-bold text-slate-700 text-base">No Delivery Orders Found</p>
+                      <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
+                        No delivery orders matched your filter or the database is currently empty.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={onCreateNew}
+                        className="mt-4 px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl shadow-xs inline-flex items-center gap-2 cursor-pointer"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        Create First Delivery Order
+                      </button>
                     </td>
                   </tr>
                 ) : (
@@ -182,24 +202,19 @@ export default function DeliveriesListView({
                       >
                         {/* Reference: <Warehouse>/<Operation>/<ID> */}
                         <td className="py-3.5 px-4 font-mono font-bold text-emerald-700 group-hover:text-emerald-900">
-                          {del.internalNumber}
-                          {del.sourceDocument && (
-                            <div className="text-[11px] font-normal text-slate-400 font-sans">
-                              Order: {del.sourceDocument}
-                            </div>
-                          )}
+                          {del.internalNumber || del.reference}
                         </td>
 
-                        {/* From (Warehouse Location) */}
-                        <td className="py-3.5 px-4 text-slate-700">
+                        {/* From (Warehouse) */}
+                        <td className="py-3.5 px-4 text-slate-700 font-medium">
                           <span className="bg-slate-100 px-2 py-1 rounded-lg border border-slate-200 font-mono text-[11px] block line-clamp-1">
-                            {del.from || del.warehouseLocation}
+                            {del.from || del.warehouse?.name || 'Central Warehouse'}
                           </span>
                         </td>
 
-                        {/* To (Customer Destination) */}
+                        {/* To (Customer / Destination) */}
                         <td className="py-3.5 px-4 text-slate-800 font-medium">
-                          <div className="line-clamp-1">{del.to || del.customer?.name}</div>
+                          <div className="line-clamp-1">{del.to || del.destination || del.customer?.name || 'Customer'}</div>
                           <div className="text-[11px] text-slate-400 font-mono">
                             GST: {del.customer?.gstNumber || 'N/A'}
                           </div>
@@ -207,27 +222,26 @@ export default function DeliveriesListView({
 
                         {/* Contact */}
                         <td className="py-3.5 px-4 text-slate-700">
-                          <div className="font-medium text-slate-900 line-clamp-1">{del.contact || del.customer?.contactPerson}</div>
-                          <div className="text-[11px] text-slate-400">{del.customer?.phone}</div>
+                          <div className="font-medium text-slate-900 line-clamp-1">{del.contact || del.customer?.contactPerson || del.responsible || '—'}</div>
+                          <div className="text-[11px] text-slate-400">{del.customer?.phone || ''}</div>
                         </td>
 
                         {/* Schedule Date */}
                         <td className="py-3.5 px-4 text-slate-600 font-medium">
                           <div className="flex items-center gap-1.5">
                             <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                            <span>{del.scheduledDate}</span>
+                            <span>{del.scheduledDate || '—'}</span>
                           </div>
                         </td>
 
                         {/* Carrier & Tracking */}
                         <td className="py-3.5 px-4 text-xs">
-                          <div className="font-medium text-slate-800 flex items-center gap-1">
-                            <Truck className="w-3.5 h-3.5 text-slate-400" />
-                            <span>{del.carrier || 'Internal Fleet'}</span>
+                          <div className="space-y-0.5">
+                            <span className="font-medium text-slate-800 block line-clamp-1">{del.carrier || 'Standard Logistics'}</span>
+                            {del.trackingNumber && (
+                              <span className="font-mono text-[11px] text-indigo-600">{del.trackingNumber}</span>
+                            )}
                           </div>
-                          {del.vehicleNumber && (
-                            <div className="text-[11px] text-slate-400 font-mono">{del.vehicleNumber}</div>
-                          )}
                         </td>
 
                         {/* Status */}
@@ -245,13 +259,32 @@ export default function DeliveriesListView({
                                 : 'bg-slate-100 text-slate-700'
                             }`}
                           >
-                            {del.status.replace('_', ' ')}
+                            {(del.status || 'draft').replace('_', ' ')}
                           </span>
                         </td>
 
-                        {/* View Arrow */}
-                        <td className="py-3.5 px-2 text-center text-slate-400 group-hover:text-emerald-600">
-                          <ChevronRight className="w-4 h-4" />
+                        {/* Actions */}
+                        <td className="py-3.5 px-4 text-center" onClick={(e) => e.stopPropagation()}>
+                          <div className="flex items-center justify-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => onSelectDelivery(del)}
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 transition-colors"
+                              title="Open delivery"
+                            >
+                              <Eye className="w-4 h-4" />
+                            </button>
+                            {onDeleteDelivery && (
+                              <button
+                                type="button"
+                                onClick={() => onDeleteDelivery(del.id, del.internalNumber || del.reference)}
+                                className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
+                                title="Delete delivery"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     );
@@ -268,10 +301,10 @@ export default function DeliveriesListView({
           </div>
         </div>
       ) : (
-        /* Kanban View */
+        /* Kanban View (Grouped by Status Columns) */
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           {kanbanColumns.map((col) => {
-            const colDeliveries = filteredDeliveries.filter((d) => d.status === col.key);
+            const colDeliveries = filteredDeliveries.filter((d) => (d.status || 'draft') === col.key);
 
             return (
               <div
@@ -292,48 +325,42 @@ export default function DeliveriesListView({
                 <div className="space-y-3 flex-1 overflow-y-auto">
                   {colDeliveries.length === 0 ? (
                     <div className="p-8 text-center border-2 border-dashed border-slate-200 rounded-xl text-slate-400 text-xs">
-                      No deliveries in {col.title}
+                      No items in {col.title}
                     </div>
                   ) : (
                     colDeliveries.map((del) => (
                       <div
                         key={del.id}
                         onClick={() => onSelectDelivery(del)}
-                        className="p-3.5 bg-white rounded-xl border border-slate-200 shadow-2xs hover:shadow-xs hover:border-emerald-400 transition-all cursor-pointer space-y-2 group"
+                        className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs hover:shadow-md hover:border-emerald-300 transition-all cursor-pointer space-y-3"
                       >
-                        {/* Top: Reference & Date */}
                         <div className="flex items-center justify-between">
-                          <span className="font-mono font-bold text-xs text-emerald-700 group-hover:text-emerald-900">
-                            {del.internalNumber}
+                          <span className="font-mono font-bold text-xs text-emerald-700">
+                            {del.internalNumber || del.reference}
                           </span>
-                          <span className="text-[11px] text-slate-400 flex items-center gap-1 font-mono">
-                            <Calendar className="w-3 h-3" />
-                            {del.scheduledDate}
+                          <span className="text-[11px] text-slate-500 flex items-center gap-1">
+                            <Calendar className="w-3 h-3 text-slate-400" />
+                            {del.scheduledDate || 'Today'}
                           </span>
                         </div>
 
-                        {/* Customer & Contact */}
                         <div>
-                          <p className="text-xs font-semibold text-slate-800 line-clamp-1">{del.to || del.customer?.name}</p>
-                          <p className="text-[11px] text-slate-500 mt-0.5">{del.contact || del.customer?.contactPerson}</p>
+                          <div className="font-semibold text-xs text-slate-900 line-clamp-1">
+                            {del.to || del.destination || del.customer?.name || 'Customer'}
+                          </div>
+                          <div className="text-[11px] text-slate-500 mt-0.5 line-clamp-1">
+                            From: {del.from || del.warehouse?.name || 'Warehouse'}
+                          </div>
                         </div>
 
-                        {/* From Warehouse Location */}
-                        <div className="text-[11px] text-slate-600 bg-slate-50 p-1.5 rounded-lg border border-slate-100 font-mono line-clamp-1">
-                          📍 {del.from || del.warehouseLocation}
-                        </div>
-
-                        {/* Carrier info */}
-                        <div className="pt-1 text-[11px] flex items-center gap-1 text-slate-500">
-                          <Truck className="w-3 h-3 text-slate-400" />
-                          <span>{del.carrier || 'Standard Dispatch'}</span>
-                        </div>
-
-                        {/* Footer Items & Qty */}
-                        <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400">
-                          <span>{del.items?.length || 0} Products</span>
-                          <span className="font-medium text-slate-700">{del.responsible}</span>
-                        </div>
+                        {del.items && del.items.length > 0 && (
+                          <div className="bg-slate-50 p-2 rounded-lg border border-slate-100 text-[11px] text-slate-600 flex justify-between items-center">
+                            <span>{del.items.length} Product Line(s)</span>
+                            <span className="font-bold font-mono text-slate-800">
+                              ₹{(del.totalAmount || 0).toLocaleString()}
+                            </span>
+                          </div>
+                        )}
                       </div>
                     ))
                   )}

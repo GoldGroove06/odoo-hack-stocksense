@@ -16,14 +16,18 @@ import {
   ChevronRight,
   Filter,
   Eye,
-  Printer
+  Printer,
+  Trash2,
+  RotateCcw
 } from 'lucide-react';
 
 export default function ReceiptsListView({
-  receipts,
+  receipts = [],
   onSelectReceipt,
   onCreateNew,
-  onPrintReceipt
+  onPrintReceipt,
+  onDeleteReceipt,
+  loading = false
 }) {
   const [viewMode, setViewMode] = useState('list'); // 'list' | 'kanban'
   const [searchQuery, setSearchQuery] = useState('');
@@ -39,9 +43,9 @@ export default function ReceiptsListView({
       // Search query (Reference & Contacts)
       if (searchQuery.trim()) {
         const query = searchQuery.toLowerCase();
-        const matchesRef = rec.internalNumber.toLowerCase().includes(query);
+        const matchesRef = (rec.internalNumber || rec.reference || '').toLowerCase().includes(query);
         const matchesContact = (rec.contact || '').toLowerCase().includes(query);
-        const matchesFrom = (rec.from || '').toLowerCase().includes(query);
+        const matchesFrom = (rec.from || rec.receiveFrom || '').toLowerCase().includes(query);
         const matchesSupplier = (rec.supplier?.name || '').toLowerCase().includes(query);
         const matchesContactPerson = (rec.supplier?.contactPerson || '').toLowerCase().includes(query);
         return matchesRef || matchesContact || matchesFrom || matchesSupplier || matchesContactPerson;
@@ -154,17 +158,34 @@ export default function ReceiptsListView({
                   <th className="py-3.5 px-4 min-w-[130px]">Schedule Date</th>
                   <th className="py-3.5 px-4 min-w-[160px]">Work Orders (MO)</th>
                   <th className="py-3.5 px-4 w-28 text-center">Status</th>
-                  <th className="py-3.5 px-2 w-12 text-center"></th>
+                  <th className="py-3.5 px-4 w-24 text-center">Actions</th>
                 </tr>
               </thead>
 
               <tbody className="divide-y divide-slate-100 bg-white">
-                {filteredReceipts.length === 0 ? (
+                {loading ? (
                   <tr>
                     <td colSpan="8" className="py-12 text-center text-slate-400">
-                      <Package className="w-10 h-10 mx-auto text-slate-300 mb-2" />
-                      <p className="font-medium text-slate-600">No receipts found</p>
-                      <p className="text-xs text-slate-400 mt-1">Try changing your search query or click "New Receipt".</p>
+                      <div className="animate-spin w-8 h-8 border-4 border-indigo-600 border-t-transparent rounded-full mx-auto mb-3" />
+                      <p className="font-medium text-slate-600">Loading receipts...</p>
+                    </td>
+                  </tr>
+                ) : filteredReceipts.length === 0 ? (
+                  <tr>
+                    <td colSpan="8" className="py-16 text-center text-slate-400">
+                      <Package className="w-12 h-12 mx-auto text-slate-300 mb-3" />
+                      <p className="font-bold text-slate-700 text-base">No Goods Receipts Found</p>
+                      <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
+                        No receipts matched your current filter or the database is currently empty.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={onCreateNew}
+                        className="mt-4 px-4 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-xs inline-flex items-center gap-2 cursor-pointer"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        Create First Receipt
+                      </button>
                     </td>
                   </tr>
                 ) : (
@@ -182,7 +203,7 @@ export default function ReceiptsListView({
                       >
                         {/* Reference: <Warehouse>/<Operation>/<ID> */}
                         <td className="py-3.5 px-4 font-mono font-bold text-indigo-700 group-hover:text-indigo-900">
-                          {rec.internalNumber}
+                          {rec.internalNumber || rec.reference}
                           {rec.sellerBillNumber && (
                             <div className="text-[11px] font-normal text-slate-400 font-sans">
                               Bill: {rec.sellerBillNumber}
@@ -192,7 +213,7 @@ export default function ReceiptsListView({
 
                         {/* From */}
                         <td className="py-3.5 px-4 text-slate-800 font-medium">
-                          <div className="line-clamp-1">{rec.from || rec.supplier?.name}</div>
+                          <div className="line-clamp-1">{rec.from || rec.receiveFrom || rec.supplier?.name || 'Vendor'}</div>
                           <div className="text-[11px] text-slate-400 font-mono">
                             GST: {rec.supplier?.gstNumber || 'N/A'}
                           </div>
@@ -201,35 +222,32 @@ export default function ReceiptsListView({
                         {/* To (Warehouse Location) */}
                         <td className="py-3.5 px-4 text-slate-700">
                           <span className="bg-slate-100 px-2 py-1 rounded-lg border border-slate-200 font-mono text-[11px] block line-clamp-1">
-                            {rec.to || rec.warehouseLocation}
+                            {rec.to || rec.warehouseLocation || rec.warehouse?.name || 'Central Warehouse'}
                           </span>
                         </td>
 
                         {/* Contact */}
                         <td className="py-3.5 px-4 text-slate-700">
-                          <div className="font-medium text-slate-900 line-clamp-1">{rec.contact || rec.supplier?.contactPerson}</div>
-                          <div className="text-[11px] text-slate-400">{rec.supplier?.phone}</div>
+                          <div className="font-medium text-slate-900 line-clamp-1">{rec.contact || rec.supplier?.contactPerson || rec.responsible || '—'}</div>
+                          <div className="text-[11px] text-slate-400">{rec.supplier?.phone || ''}</div>
                         </td>
 
                         {/* Schedule Date */}
                         <td className="py-3.5 px-4 text-slate-600 font-medium">
                           <div className="flex items-center gap-1.5">
                             <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                            <span>{rec.scheduledDate}</span>
+                            <span>{rec.scheduledDate || '—'}</span>
                           </div>
                         </td>
 
                         {/* Linked Manufacturing Work Orders */}
                         <td className="py-3.5 px-4 text-xs">
-                          {rec.manufacturingOrder ? (
+                          {rec.moNumber || rec.manufacturingOrder ? (
                             <div className="space-y-1">
                               <span className="inline-flex items-center gap-1 font-semibold text-purple-700 bg-purple-50 border border-purple-200 px-2 py-0.5 rounded-md">
                                 <Cpu className="w-3 h-3" />
-                                {rec.manufacturingOrder.moNumber}
+                                {rec.moNumber || rec.manufacturingOrder?.moNumber}
                               </span>
-                              <div className="text-[11px] text-slate-500">
-                                {rec.manufacturingOrder.workOrders.length} Work Orders Linked
-                              </div>
                             </div>
                           ) : (
                             <span className="text-slate-400 text-xs">—</span>
@@ -251,13 +269,32 @@ export default function ReceiptsListView({
                                 : 'bg-slate-100 text-slate-700'
                             }`}
                           >
-                            {rec.status.replace('_', ' ')}
+                            {(rec.status || 'draft').replace('_', ' ')}
                           </span>
                         </td>
 
-                        {/* View Arrow */}
-                        <td className="py-3.5 px-2 text-center text-slate-400 group-hover:text-indigo-600">
-                          <ChevronRight className="w-4 h-4" />
+                        {/* Actions */}
+                        <td className="py-3.5 px-4 text-center" onClick={(e) => e.stopPropagation()}>
+                          <div className="flex items-center justify-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => onSelectReceipt(rec)}
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
+                              title="Open receipt"
+                            >
+                              <Eye className="w-4 h-4" />
+                            </button>
+                            {onDeleteReceipt && (
+                              <button
+                                type="button"
+                                onClick={() => onDeleteReceipt(rec.id, rec.internalNumber || rec.reference)}
+                                className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
+                                title="Delete receipt"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     );
@@ -277,7 +314,7 @@ export default function ReceiptsListView({
         /* Kanban View (Grouped by Status Columns) */
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           {kanbanColumns.map((col) => {
-            const colReceipts = filteredReceipts.filter((r) => r.status === col.key);
+            const colReceipts = filteredReceipts.filter((r) => (r.status || 'draft') === col.key);
 
             return (
               <div
@@ -298,50 +335,42 @@ export default function ReceiptsListView({
                 <div className="space-y-3 flex-1 overflow-y-auto">
                   {colReceipts.length === 0 ? (
                     <div className="p-8 text-center border-2 border-dashed border-slate-200 rounded-xl text-slate-400 text-xs">
-                      No receipts in {col.title}
+                      No items in {col.title}
                     </div>
                   ) : (
                     colReceipts.map((rec) => (
                       <div
                         key={rec.id}
                         onClick={() => onSelectReceipt(rec)}
-                        className="p-3.5 bg-white rounded-xl border border-slate-200 shadow-2xs hover:shadow-xs hover:border-indigo-400 transition-all cursor-pointer space-y-2 group"
+                        className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs hover:shadow-md hover:border-indigo-300 transition-all cursor-pointer space-y-3"
                       >
-                        {/* Top: Reference & Date */}
                         <div className="flex items-center justify-between">
-                          <span className="font-mono font-bold text-xs text-indigo-700 group-hover:text-indigo-900">
-                            {rec.internalNumber}
+                          <span className="font-mono font-bold text-xs text-indigo-700">
+                            {rec.internalNumber || rec.reference}
                           </span>
-                          <span className="text-[11px] text-slate-400 flex items-center gap-1 font-mono">
-                            <Calendar className="w-3 h-3" />
-                            {rec.scheduledDate}
+                          <span className="text-[11px] text-slate-500 flex items-center gap-1">
+                            <Calendar className="w-3 h-3 text-slate-400" />
+                            {rec.scheduledDate || 'Today'}
                           </span>
                         </div>
 
-                        {/* From & Contact */}
                         <div>
-                          <p className="text-xs font-semibold text-slate-800 line-clamp-1">{rec.from || rec.supplier?.name}</p>
-                          <p className="text-[11px] text-slate-500 mt-0.5">{rec.contact || rec.supplier?.contactPerson}</p>
+                          <div className="font-semibold text-xs text-slate-900 line-clamp-1">
+                            {rec.from || rec.receiveFrom || rec.supplier?.name || 'Vendor'}
+                          </div>
+                          <div className="text-[11px] text-slate-500 mt-0.5 line-clamp-1">
+                            To: {rec.to || rec.warehouseLocation || rec.warehouse?.name || 'Warehouse'}
+                          </div>
                         </div>
 
-                        {/* To Location */}
-                        <div className="text-[11px] text-slate-600 bg-slate-50 p-1.5 rounded-lg border border-slate-100 font-mono line-clamp-1">
-                          📍 {rec.to || rec.warehouseLocation}
-                        </div>
-
-                        {/* Linked Work Orders badge if any */}
-                        {rec.manufacturingOrder && (
-                          <div className="pt-1 text-[11px] flex items-center gap-1 text-purple-700 font-medium">
-                            <Cpu className="w-3 h-3 text-purple-600" />
-                            <span>{rec.manufacturingOrder.moNumber} ({rec.manufacturingOrder.workOrders.length} WOs)</span>
+                        {rec.items && rec.items.length > 0 && (
+                          <div className="bg-slate-50 p-2 rounded-lg border border-slate-100 text-[11px] text-slate-600 flex justify-between items-center">
+                            <span>{rec.items.length} Product Line(s)</span>
+                            <span className="font-bold font-mono text-slate-800">
+                              ₹{(rec.totalAmount || 0).toLocaleString()}
+                            </span>
                           </div>
                         )}
-
-                        {/* Footer Items & Qty */}
-                        <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400">
-                          <span>{rec.items?.length || 0} Products</span>
-                          <span className="font-medium text-slate-700">{rec.responsible}</span>
-                        </div>
                       </div>
                     ))
                   )}
