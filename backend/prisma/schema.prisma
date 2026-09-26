@@ -7,17 +7,43 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model User {
-  id        Int      @id @default(autoincrement())
-  name      String
-  email     String   @unique
-  password  String
-  role      Role     @default(WAREHOUSE_STAFF)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
 enum Role {
+  OWNER
   INVENTORY_MANAGER
   WAREHOUSE_STAFF
+}
+
+model Company {
+  id        Int      @id @default(autoincrement())
+  name      String
+  address   String
+  phone     String
+  gstNumber String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  users     User[]
+}
+
+model User {
+  id                Int                @id @default(autoincrement())
+  name              String
+  email             String             @unique
+  password          String
+  role              Role               @default(WAREHOUSE_STAFF)
+  companyId         Int?
+  company           Company?           @relation(fields: [companyId], references: [id])
+  mustResetPassword Boolean            @default(false)
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  passwordResetOtps PasswordResetOtp[]
+}
+
+model PasswordResetOtp {
+  id        Int       @id @default(autoincrement())
+  userId    Int
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  codeHash  String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
 }

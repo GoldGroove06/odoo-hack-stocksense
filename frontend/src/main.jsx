@@ -1,99 +1,160 @@
-
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "./index.css";
-import App from "./App.jsx";
-import { createBrowserRouter, RouterProvider } from "react-router-dom";
+import { createBrowserRouter, Navigate, RouterProvider } from "react-router-dom";
 import Login from "./pages/login/Login.jsx";
 import Signup from "./pages/signup/Signup.jsx";
+import {
+  ForgotPasswordPage,
+  ForcedResetPasswordPage,
+} from "./pages/login/ResetPassword.jsx";
+import CreateCompany from "./pages/company/CreateCompany.jsx";
+import CompanyManagementPage from "./pages/company/CompanyManagementPage.jsx";
+import { AuthProvider } from "./context/AuthContext.jsx";
+import {
+  ProtectedRoute,
+  PublicOnlyRoute,
+} from "./components/ProtectedRoute.jsx";
 
-import DashboardPage from './pages/dashboard/DashboardPage.jsx';
-import ReceiptPage from './pages/receipts/ReceiptPage.jsx';
-import DeliveryPage from './pages/delivery/DeliveryPage.jsx';
-import MovementPage from './pages/movements/MovementPage.jsx';
-import AdjustmentPage from './pages/adjustments/AdjustmentPage.jsx';
-import StockPage from './pages/stock/StockPage.jsx';
-import WarehousesPage from './pages/settings/WarehousesPage.jsx';
-import LocationsPage from './pages/settings/LocationsPage.jsx';
-import Product from './pages/product/index.jsx';
+import DashboardPage from "./pages/dashboard/DashboardPage.jsx";
+import ReceiptPage from "./pages/receipts/ReceiptPage.jsx";
+import DeliveryPage from "./pages/delivery/DeliveryPage.jsx";
+import MovementPage from "./pages/movements/MovementPage.jsx";
+import AdjustmentPage from "./pages/adjustments/AdjustmentPage.jsx";
+import StockPage from "./pages/stock/StockPage.jsx";
+import WarehousesPage from "./pages/settings/WarehousesPage.jsx";
+import LocationsPage from "./pages/settings/LocationsPage.jsx";
+import Product from "./pages/product/index.jsx";
+
+function guard(element, options = {}) {
+  return <ProtectedRoute {...options}>{element}</ProtectedRoute>;
+}
 
 const router = createBrowserRouter([
   {
     path: "/",
-    element: <App />
+    element: <Navigate to="/dashboard" replace />,
   },
   {
     path: "/dashboard",
-    element: <DashboardPage />
+    element: guard(<DashboardPage />),
   },
   {
     path: "/receipts",
-    element: <ReceiptPage />
+    element: guard(<ReceiptPage />, {
+      allowedRoles: ["OWNER", "INVENTORY_MANAGER"],
+    }),
   },
   {
     path: "/receipt",
-    element: <ReceiptPage />
+    element: guard(<ReceiptPage />, {
+      allowedRoles: ["OWNER", "INVENTORY_MANAGER"],
+    }),
   },
   {
     path: "/deliveries",
-    element: <DeliveryPage />
+    element: guard(<DeliveryPage />, {
+      allowedRoles: ["OWNER", "INVENTORY_MANAGER"],
+    }),
   },
   {
     path: "/delivery",
-    element: <DeliveryPage />
+    element: guard(<DeliveryPage />, {
+      allowedRoles: ["OWNER", "INVENTORY_MANAGER"],
+    }),
   },
   {
     path: "/adjustments",
-    element: <AdjustmentPage />
+    element: guard(<AdjustmentPage />),
   },
   {
     path: "/adjustment",
-    element: <AdjustmentPage />
+    element: guard(<AdjustmentPage />),
   },
   {
     path: "/stock",
-    element: <StockPage />
+    element: guard(<StockPage />),
   },
   {
     path: "/stocks",
-    element: <StockPage />
+    element: guard(<StockPage />),
   },
   {
     path: "/movements",
-    element: <MovementPage />
+    element: guard(<MovementPage />),
   },
   {
     path: "/movement",
-    element: <MovementPage />
+    element: guard(<MovementPage />),
   },
   {
     path: "/history",
-    element: <MovementPage />
+    element: guard(<MovementPage />),
   },
   {
     path: "/settings/warehouses",
-    element: <WarehousesPage />
+    element: guard(<WarehousesPage />, {
+      allowedRoles: ["OWNER", "INVENTORY_MANAGER"],
+    }),
   },
   {
     path: "/settings/locations",
-    element: <LocationsPage />
+    element: guard(<LocationsPage />, {
+      allowedRoles: ["OWNER", "INVENTORY_MANAGER"],
+    }),
+  },
+  {
+    path: "/company",
+    element: guard(<CompanyManagementPage />, {
+      allowedRoles: ["OWNER"],
+    }),
+  },
+  {
+    path: "/create-company",
+    element: (
+      <ProtectedRoute requireCompany={false}>
+        <CreateCompany />
+      </ProtectedRoute>
+    ),
   },
   {
     path: "/product",
-    element: <Product />,
+    element: guard(<Product />),
   },
   {
     path: "/login",
-    element: <Login />,
+    element: (
+      <PublicOnlyRoute>
+        <Login />
+      </PublicOnlyRoute>
+    ),
   },
   {
     path: "/signup",
-    element: <Signup />,
+    element: (
+      <PublicOnlyRoute>
+        <Signup />
+      </PublicOnlyRoute>
+    ),
+  },
+  {
+    path: "/forgot-password",
+    element: (
+      <PublicOnlyRoute>
+        <ForgotPasswordPage />
+      </PublicOnlyRoute>
+    ),
+  },
+  {
+    path: "/reset-password",
+    element: <ForcedResetPasswordPage />,
   },
 ]);
 
 createRoot(document.getElementById("root")).render(
   <StrictMode>
-    <RouterProvider router={router} />
+    <AuthProvider>
+      <RouterProvider router={router} />
+    </AuthProvider>
   </StrictMode>,
 );
