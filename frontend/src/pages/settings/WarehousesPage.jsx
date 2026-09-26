@@ -45,14 +45,14 @@ export default function WarehousesPage() {
     setLoading(true);
     try {
       const res = await warehouseApi.getAll();
-      if (res && res.data && res.data.length > 0) {
+      if (res && Array.isArray(res.data)) {
         setWarehouses(res.data);
       } else {
-        setWarehouses(INITIAL_WAREHOUSES);
+        setWarehouses([]);
       }
     } catch (err) {
-      console.warn('Backend warehouse API offline, using fallback:', err.message);
-      setWarehouses(INITIAL_WAREHOUSES);
+      console.warn('Backend warehouse API error:', err.message);
+      setWarehouses([]);
     } finally {
       setLoading(false);
     }
@@ -246,8 +246,29 @@ export default function WarehousesPage() {
               </thead>
 
               <tbody className="divide-y divide-slate-100 bg-white">
-                {filteredWarehouses.map((wh) => (
-                  <tr key={wh.id} className="hover:bg-slate-50/70 transition-colors">
+                {filteredWarehouses.length === 0 ? (
+                  <tr>
+                    <td colSpan="6" className="py-14 text-center text-slate-400">
+                      <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center mx-auto mb-3">
+                        <Building2 className="w-6 h-6" />
+                      </div>
+                      <p className="font-semibold text-slate-700 text-sm">No warehouses configured</p>
+                      <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
+                        There are currently no warehouses in the database. Click below to add your primary distribution facility.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={handleOpenAdd}
+                        className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-xs transition-colors cursor-pointer"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        Add Warehouse
+                      </button>
+                    </td>
+                  </tr>
+                ) : (
+                  filteredWarehouses.map((wh) => (
+                    <tr key={wh.id} className="hover:bg-slate-50/70 transition-colors">
                     {/* Shortcode */}
                     <td className="py-3.5 px-4 text-center">
                       <span className="font-mono font-bold text-xs text-indigo-700 bg-indigo-50 px-2.5 py-1 rounded-lg border border-indigo-200">

@@ -54,30 +54,28 @@ export default function LocationsPage() {
     setLoading(true);
     try {
       // 1. Fetch Warehouses
-      let loadedWh = INITIAL_WAREHOUSES;
       try {
         const whRes = await warehouseApi.getAll();
-        if (whRes && whRes.data && whRes.data.length > 0) {
-          loadedWh = whRes.data;
+        if (whRes && Array.isArray(whRes.data)) {
           setWarehouses(whRes.data);
         } else {
-          setWarehouses(INITIAL_WAREHOUSES);
+          setWarehouses([]);
         }
       } catch (err) {
-        setWarehouses(INITIAL_WAREHOUSES);
+        setWarehouses([]);
       }
 
       // 2. Fetch Locations
       try {
         const locRes = await locationApi.getAll();
-        if (locRes && locRes.data && locRes.data.length > 0) {
+        if (locRes && Array.isArray(locRes.data)) {
           setLocations(locRes.data);
         } else {
-          setLocations(INITIAL_LOCATIONS);
+          setLocations([]);
         }
       } catch (err) {
-        console.warn('Backend location API offline, using fallback:', err.message);
-        setLocations(INITIAL_LOCATIONS);
+        console.warn('Backend location API error:', err.message);
+        setLocations([]);
       }
     } finally {
       setLoading(false);
@@ -288,8 +286,29 @@ export default function LocationsPage() {
               </thead>
 
               <tbody className="divide-y divide-slate-100 bg-white">
-                {filteredLocations.map((loc) => (
-                  <tr key={loc.id} className="hover:bg-slate-50/70 transition-colors">
+                {filteredLocations.length === 0 ? (
+                  <tr>
+                    <td colSpan="6" className="py-14 text-center text-slate-400">
+                      <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center mx-auto mb-3">
+                        <MapPin className="w-6 h-6" />
+                      </div>
+                      <p className="font-semibold text-slate-700 text-sm">No storage locations configured</p>
+                      <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
+                        There are currently no internal racks or storage bays in the database. Click below to add a location.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={handleOpenAdd}
+                        className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-xs transition-colors cursor-pointer"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        Add Location
+                      </button>
+                    </td>
+                  </tr>
+                ) : (
+                  filteredLocations.map((loc) => (
+                    <tr key={loc.id} className="hover:bg-slate-50/70 transition-colors">
                     {/* Shortcode */}
                     <td className="py-3.5 px-4 text-center">
                       <span className="font-mono font-bold text-xs text-indigo-700 bg-indigo-50 px-2.5 py-1 rounded-lg border border-indigo-200">
