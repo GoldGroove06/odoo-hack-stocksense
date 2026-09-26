@@ -28,7 +28,7 @@ import {
   Navigation,
   Box
 } from 'lucide-react';
-import { deliveryApi, customerApi, warehouseApi, productApi } from '../../services/api';
+import { deliveryApi, customerApi, warehouseApi, productApi, locationApi } from '../../services/api';
 import AddDeliveryProductModal from './AddDeliveryProductModal';
 import CustomerModal from './CustomerModal';
 import PrintDeliveryModal from './PrintDeliveryModal';
@@ -58,12 +58,15 @@ export default function DeliveryPage() {
     customerNotes: '',
     customer: null,
     warehouse: null,
+    sourceLocationId: null,
     taxRate: 18,
     items: []
   });
 
   const [customers, setCustomers] = useState([]);
   const [warehouses, setWarehouses] = useState([]);
+  const [products, setProducts] = useState([]);
+  const [locations, setLocations] = useState([]);
 
   const [isAddProductOpen, setIsAddProductOpen] = useState(false);
   const [isCustomerModalOpen, setIsCustomerModalOpen] = useState(false);
@@ -80,10 +83,12 @@ export default function DeliveryPage() {
   const fetchDeliveries = async () => {
     try {
       setLoading(true);
-      const [resDeliveries, resCustomers, resWarehouses] = await Promise.all([
+      const [resDeliveries, resCustomers, resWarehouses, resProducts, resLocations] = await Promise.all([
         deliveryApi.getAll().catch(() => ({ data: [] })),
         customerApi.getAll().catch(() => ({ data: [] })),
-        warehouseApi.getAll().catch(() => ({ data: [] }))
+        warehouseApi.getAll().catch(() => ({ data: [] })),
+        productApi.getAll().catch(() => ({ data: [] })),
+        locationApi.getAll().catch(() => ({ data: [] }))
       ]);
 
       const formatted = (resDeliveries.data || []).map((d) => ({
@@ -94,7 +99,7 @@ export default function DeliveryPage() {
         movementStatus: d.status === 'done' ? 'delivered' : d.status === 'ready' ? 'packing' : d.status === 'in_progress' ? 'moving' : 'creation',
         destination: d.destination || '',
         to: d.destination || (d.customer ? d.customer.name : 'Customer Destination'),
-        from: d.warehouse ? d.warehouse.name : 'Central Stock Room',
+        from: d.sourceLocation?.name || (d.warehouse ? d.warehouse.name : 'Central Stock Room'),
         contact: d.customer ? `${d.customer.contactPerson || ''} (${d.customer.phone || ''})` : d.responsible,
         carrier: d.carrier || 'Internal Logistics',
         trackingNumber: d.trackingNumber || '',
@@ -106,13 +111,14 @@ export default function DeliveryPage() {
         moNumber: d.moNumber || '',
         customer: d.customer,
         warehouse: d.warehouse,
+        sourceLocationId: d.sourceLocationId || d.sourceLocation?.id || null,
         taxRate: d.taxRate || 18,
         taxAmount: d.taxAmount || 0,
         subtotal: d.subtotal || 0,
         totalAmount: d.totalAmount || 0,
         items: (d.items || []).map((item) => ({
           id: item.id,
-          productId: item.productId,
+          productId: item.productId != null ? Number(item.productId) : null,
           productName: item.name,
           name: item.name,
           sku: item.sku || '',
@@ -129,6 +135,8 @@ export default function DeliveryPage() {
       setDeliveriesList(formatted);
       setCustomers(resCustomers.data || []);
       setWarehouses(resWarehouses.data || []);
+      setProducts(resProducts.data || []);
+      setLocations(resLocations.data || []);
     } catch (err) {
       console.error('Failed to load deliveries:', err);
     } finally {
@@ -223,11 +231,20 @@ export default function DeliveryPage() {
       showToast('Please add at least one product before validating delivery!', 'error');
       return;
     }
+    if (!delivery.sourceLocationId) {
+      showToast('Select a source location before validating', 'error');
+      return;
+    }
+    const oversell = lineOversells();
+    if (oversell.length) {
+      showToast(`Cannot ship — insufficient stock: ${oversell.join('; ')}`, 'error');
+      return;
+    }
 
     try {
       if (delivery.isNew || !delivery.id) {
         const payload = {
-          status: 'done',
+          status: 'draft',
           scheduledDate: delivery.scheduledDate,
           destination: delivery.to || delivery.destination || 'Customer Destination',
           responsible: delivery.responsible,
@@ -241,8 +258,11 @@ export default function DeliveryPage() {
           totalAmount: grandTotal,
           customerId: delivery.customer?.id || null,
           warehouseId: delivery.warehouse?.id || null,
+          sourceLocationId: delivery.sourceLocationId
+            ? Number(delivery.sourceLocationId)
+            : null,
           items: delivery.items.map((i) => ({
-            productId: i.productId || null,
+            productId: i.productId != null ? Number(i.productId) : null,
             name: i.productName || i.name,
             sku: i.sku || null,
             quantity: parseFloat(i.qty || i.quantity) || 1,
@@ -269,6 +289,15 @@ export default function DeliveryPage() {
   };
 
   const handleSaveDelivery = async () => {
+    if (!delivery.sourceLocationId) {
+      showToast('Select a source location before saving', 'error');
+      return;
+    }
+    const oversell = lineOversells();
+    if (oversell.length) {
+      showToast(`Cannot save — insufficient stock: ${oversell.join('; ')}`, 'error');
+      return;
+    }
     try {
       const payload = {
         status: delivery.status || 'draft',
@@ -285,8 +314,11 @@ export default function DeliveryPage() {
         totalAmount: grandTotal,
         customerId: delivery.customer?.id || null,
         warehouseId: delivery.warehouse?.id || null,
+        sourceLocationId: delivery.sourceLocationId
+          ? Number(delivery.sourceLocationId)
+          : null,
         items: delivery.items.map((i) => ({
-          productId: i.productId || null,
+          productId: i.productId != null ? Number(i.productId) : null,
           name: i.productName || i.name,
           sku: i.sku || null,
           quantity: parseFloat(i.qty || i.quantity) || 1,
@@ -379,6 +411,7 @@ export default function DeliveryPage() {
       customerNotes: '',
       customer: customers[0] || null,
       warehouse: warehouses[0] || null,
+      sourceLocationId: locations[0]?.id || null,
       taxRate: 18,
       items: []
     };
@@ -388,13 +421,77 @@ export default function DeliveryPage() {
     showToast(`Draft delivery ${nextRef} initialized`);
   };
 
+  const handleCreateCustomer = async (payload) => {
+    try {
+      const res = await customerApi.create(payload);
+      const created = res.data;
+      setCustomers((prev) => [...prev, created]);
+      showToast(`Customer "${created.name}" created`);
+      return created;
+    } catch (err) {
+      showToast(err.message || 'Failed to create customer', 'error');
+      return null;
+    }
+  };
+
   // Item modifications
+  const freeAtSource = (productId) => {
+    if (!delivery.sourceLocationId || !productId) return 0;
+    const product = products.find((p) => Number(p.id) === Number(productId));
+    if (!product) return 0;
+    const q = (product.stockQuants || []).find(
+      (sq) => Number(sq.locationId) === Number(delivery.sourceLocationId)
+    );
+    if (!q) return 0;
+    if (q.freeQty != null) return Math.max(0, Number(q.freeQty));
+    return Math.max(0, (Number(q.quantity) || 0) - (Number(q.reservedQty) || 0));
+  };
+
+  const lineOversells = () => {
+    const demand = new Map();
+    for (const item of delivery.items || []) {
+      if (!item.productId) continue;
+      const qty = parseFloat(item.qty || item.quantity) || 0;
+      demand.set(Number(item.productId), (demand.get(Number(item.productId)) || 0) + qty);
+    }
+    const problems = [];
+    for (const [productId, qty] of demand) {
+      const available = freeAtSource(productId);
+      // When already picked/ready, stock is reserved — skip free check client-side
+      if (delivery.status === 'in_progress' || delivery.status === 'ready') continue;
+      if (qty > available) {
+        const p = products.find((x) => Number(x.id) === productId);
+        problems.push(`${p?.name || productId}: need ${qty}, available ${available}`);
+      }
+    }
+    return problems;
+  };
+
   const handleAddProduct = (newProduct) => {
+    if (!delivery.sourceLocationId) {
+      showToast('Select a source location before adding products', 'error');
+      return;
+    }
+    if (newProduct.productId == null) {
+      showToast('Only catalog products with stock can be delivered', 'error');
+      return;
+    }
     const qty = parseFloat(newProduct.qty) || 1;
+    const available = freeAtSource(newProduct.productId);
+    const alreadyOnDelivery = (delivery.items || [])
+      .filter((i) => Number(i.productId) === Number(newProduct.productId))
+      .reduce((s, i) => s + (parseFloat(i.qty || i.quantity) || 0), 0);
+    if (alreadyOnDelivery + qty > available) {
+      showToast(
+        `Insufficient stock for ${newProduct.productName}: need ${alreadyOnDelivery + qty}, available ${available}`,
+        'error'
+      );
+      return;
+    }
     const cost = parseFloat(newProduct.cost) || 0;
     const item = {
       id: `temp-${Date.now()}`,
-      productId: newProduct.productId || null,
+      productId: Number(newProduct.productId),
       productName: newProduct.productName,
       name: newProduct.productName,
       sku: newProduct.sku || '',
@@ -403,7 +500,8 @@ export default function DeliveryPage() {
       cost,
       unitCost: cost,
       totalPrice: qty * cost,
-      unit: newProduct.unit || 'Units'
+      unit: newProduct.unit || 'Units',
+      availableQty: available
     };
 
     const updated = {
@@ -731,7 +829,7 @@ export default function DeliveryPage() {
                   {/* Source Warehouse */}
                   <div className="space-y-1.5">
                     <label className="block text-xs font-semibold text-slate-700">
-                      Source Warehouse (From) <span className="text-rose-500">*</span>
+                      Source Warehouse <span className="text-rose-500">*</span>
                     </label>
                     <select
                       value={delivery.warehouse?.id || ''}
@@ -753,6 +851,33 @@ export default function DeliveryPage() {
                       {warehouses.length === 0 && (
                         <option value="">Central Stock Room (Default)</option>
                       )}
+                    </select>
+                  </div>
+
+                  {/* Source Location */}
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-semibold text-slate-700">
+                      Source Location <span className="text-rose-500">*</span>
+                    </label>
+                    <select
+                      value={delivery.sourceLocationId || ''}
+                      onChange={(e) => {
+                        const locId = e.target.value ? Number(e.target.value) : null;
+                        const loc = locations.find((l) => l.id === locId);
+                        setDelivery({
+                          ...delivery,
+                          sourceLocationId: locId,
+                          from: loc?.name || delivery.from
+                        });
+                      }}
+                      className="w-full px-3.5 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:bg-white focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all font-medium text-slate-800"
+                    >
+                      <option value="">Select source location</option>
+                      {locations.map((loc) => (
+                        <option key={loc.id} value={loc.id}>
+                          {loc.name}
+                        </option>
+                      ))}
                     </select>
                   </div>
 
@@ -847,7 +972,13 @@ export default function DeliveryPage() {
                     </div>
                     <button
                       type="button"
-                      onClick={() => setIsAddProductOpen(true)}
+                      onClick={() => {
+                        if (!delivery.sourceLocationId) {
+                          showToast('Select a source location before adding products', 'error');
+                          return;
+                        }
+                        setIsAddProductOpen(true);
+                      }}
                       className="px-3 py-1.5 text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer"
                     >
                       <Plus className="w-3.5 h-3.5" />
@@ -861,6 +992,7 @@ export default function DeliveryPage() {
                         <tr>
                           <th className="py-2.5 px-3">Product Name</th>
                           <th className="py-2.5 px-3 w-32">SKU</th>
+                          <th className="py-2.5 px-3 w-24 text-right">Available</th>
                           <th className="py-2.5 px-3 w-28 text-right">Quantity</th>
                           <th className="py-2.5 px-3 w-24">Unit</th>
                           <th className="py-2.5 px-3 w-32 text-right">Unit Price (₹)</th>
@@ -872,12 +1004,18 @@ export default function DeliveryPage() {
                       <tbody className="divide-y divide-slate-100 bg-white">
                         {(!delivery.items || delivery.items.length === 0) ? (
                           <tr>
-                            <td colSpan="7" className="py-8 text-center text-slate-400">
+                            <td colSpan="8" className="py-8 text-center text-slate-400">
                               <Package className="w-8 h-8 mx-auto text-slate-300 mb-1" />
                               <p className="font-medium text-slate-600 text-xs">No products in this delivery order</p>
                               <button
                                 type="button"
-                                onClick={() => setIsAddProductOpen(true)}
+                                onClick={() => {
+                                  if (!delivery.sourceLocationId) {
+                                    showToast('Select a source location before adding products', 'error');
+                                    return;
+                                  }
+                                  setIsAddProductOpen(true);
+                                }}
                                 className="text-xs font-semibold text-emerald-600 hover:underline mt-1 inline-block cursor-pointer"
                               >
                                 + Add First Item
@@ -885,21 +1023,47 @@ export default function DeliveryPage() {
                             </td>
                           </tr>
                         ) : (
-                          delivery.items.map((item) => (
+                          delivery.items.map((item) => {
+                            const avail =
+                              item.availableQty != null
+                                ? item.availableQty
+                                : freeAtSource(item.productId);
+                            const qty = parseFloat(item.qty || item.quantity) || 0;
+                            const over = item.productId && qty > avail && delivery.status === 'draft';
+                            return (
                             <tr key={item.id} className="hover:bg-slate-50/60 transition-colors">
                               <td className="py-2.5 px-3 font-medium text-slate-800">
                                 {item.productName || item.name}
                               </td>
-                              <td className="py-2.5 px-3 font-mono text-xs text-slate-500">
-                                {item.sku || '—'}
+                              <td className="py-2.5 px-3 font-mono text-xs text-slate-500">{item.sku || '—'}</td>
+                              <td className={`py-2.5 px-3 text-right font-semibold ${over ? 'text-rose-600' : 'text-emerald-700'}`}>
+                                {item.productId != null ? avail : '—'}
                               </td>
                               <td className="py-2.5 px-3 text-right">
                                 <input
                                   type="number"
                                   min="1"
+                                  max={avail > 0 ? avail : undefined}
                                   value={item.qty || item.quantity || 1}
-                                  onChange={(e) => handleItemFieldChange(item.id, 'qty', e.target.value)}
-                                  className="w-20 px-2 py-1 text-right text-xs bg-slate-50 border border-slate-200 rounded font-semibold text-slate-800"
+                                  onChange={(e) => {
+                                    const next = parseFloat(e.target.value) || 0;
+                                    if (
+                                      item.productId &&
+                                      delivery.status === 'draft' &&
+                                      next > avail
+                                    ) {
+                                      showToast(
+                                        `Only ${avail} available for ${item.productName || item.name}`,
+                                        'error'
+                                      );
+                                      handleItemFieldChange(item.id, 'qty', String(avail));
+                                      return;
+                                    }
+                                    handleItemFieldChange(item.id, 'qty', e.target.value);
+                                  }}
+                                  className={`w-20 px-2 py-1 text-right text-xs bg-slate-50 border rounded font-semibold text-slate-800 ${
+                                    over ? 'border-rose-400' : 'border-slate-200'
+                                  }`}
                                 />
                               </td>
                               <td className="py-2.5 px-3 text-slate-600 text-xs">
@@ -928,7 +1092,8 @@ export default function DeliveryPage() {
                                 </button>
                               </td>
                             </tr>
-                          ))
+                            );
+                          })
                         )}
                       </tbody>
                     </table>
@@ -991,12 +1156,16 @@ export default function DeliveryPage() {
         isOpen={isAddProductOpen}
         onClose={() => setIsAddProductOpen(false)}
         onAddProduct={handleAddProduct}
+        products={products}
+        sourceLocationId={delivery.sourceLocationId}
       />
 
       <CustomerModal
         isOpen={isCustomerModalOpen}
         onClose={() => setIsCustomerModalOpen(false)}
         currentCustomer={delivery.customer}
+        customers={customers}
+        onCreateCustomer={handleCreateCustomer}
         onSelectCustomer={(selectedCust) => {
           setDelivery({
             ...delivery,

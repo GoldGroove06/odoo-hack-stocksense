@@ -81,15 +81,9 @@ export default function Navbar({ activePage = 'dashboard' }) {
           
           <div className="flex items-center gap-8">
             <Link to="/dashboard" className="flex items-center gap-2.5 group">
-              <div className="w-8 h-8 rounded-xl bg-indigo-600 text-white flex items-center justify-center font-bold text-sm shadow-xs group-hover:bg-indigo-700 transition-colors">
-                SS
-              </div>
               <div>
-                <span className="font-extrabold text-base tracking-tight text-slate-900 block leading-tight">
+                <span className="font-bold text-base tracking-tight text-slate-900 block leading-tight">
                   StockSense
-                </span>
-                <span className="text-[10px] uppercase font-bold text-indigo-600 tracking-wider">
-                  ERP Inventory
                 </span>
               </div>
             </Link>

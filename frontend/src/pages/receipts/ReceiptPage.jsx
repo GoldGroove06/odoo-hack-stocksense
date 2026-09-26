@@ -27,7 +27,7 @@ import {
   Cpu,
   ListOrdered
 } from 'lucide-react';
-import { receiptApi, supplierApi, warehouseApi, productApi } from '../../services/api';
+import { receiptApi, supplierApi, warehouseApi, productApi, locationApi } from '../../services/api';
 import AddProductModal from './AddProductModal';
 import SupplierModal from './SupplierModal';
 import PrintReceiptModal from './PrintReceiptModal';
@@ -56,12 +56,15 @@ export default function ReceiptPage() {
     moNumber: '',
     supplier: null,
     warehouse: null,
+    destinationLocationId: null,
     taxRate: 18,
     items: []
   });
 
   const [suppliers, setSuppliers] = useState([]);
   const [warehouses, setWarehouses] = useState([]);
+  const [products, setProducts] = useState([]);
+  const [locations, setLocations] = useState([]);
   
   const [isAddProductOpen, setIsAddProductOpen] = useState(false);
   const [isSupplierModalOpen, setIsSupplierModalOpen] = useState(false);
@@ -79,10 +82,12 @@ export default function ReceiptPage() {
   const fetchReceipts = async () => {
     try {
       setLoading(true);
-      const [resReceipts, resSuppliers, resWarehouses] = await Promise.all([
+      const [resReceipts, resSuppliers, resWarehouses, resProducts, resLocations] = await Promise.all([
         receiptApi.getAll().catch(() => ({ data: [] })),
         supplierApi.getAll().catch(() => ({ data: [] })),
-        warehouseApi.getAll().catch(() => ({ data: [] }))
+        warehouseApi.getAll().catch(() => ({ data: [] })),
+        productApi.getAll().catch(() => ({ data: [] })),
+        locationApi.getAll().catch(() => ({ data: [] }))
       ]);
 
       const formatted = (resReceipts.data || []).map((r) => ({
@@ -92,7 +97,7 @@ export default function ReceiptPage() {
         status: r.status || 'draft',
         movementStatus: r.status === 'done' ? 'received' : r.status === 'ready' ? 'arrived' : r.status === 'in_progress' ? 'moving' : 'creation',
         from: r.receiveFrom || (r.supplier ? r.supplier.name : 'Vendor / Supplier'),
-        to: r.warehouse ? r.warehouse.name : 'Central Stock Room',
+        to: r.destinationLocation?.name || (r.warehouse ? r.warehouse.name : 'Central Stock Room'),
         contact: r.supplier ? `${r.supplier.contactPerson || ''} (${r.supplier.phone || ''})` : r.responsible,
         sellerBillNumber: r.sellerBillNumber || '',
         scheduledDate: r.scheduledDate || '',
@@ -103,13 +108,14 @@ export default function ReceiptPage() {
         moNumber: r.moNumber || '',
         supplier: r.supplier,
         warehouse: r.warehouse,
+        destinationLocationId: r.destinationLocationId || r.destinationLocation?.id || null,
         taxRate: r.taxRate || 18,
         taxAmount: r.taxAmount || 0,
         subtotal: r.subtotal || 0,
         totalAmount: r.totalAmount || 0,
         items: (r.items || []).map((item) => ({
           id: item.id,
-          productId: item.productId,
+          productId: item.productId != null ? Number(item.productId) : null,
           productName: item.name,
           name: item.name,
           sku: item.sku || '',
@@ -126,6 +132,8 @@ export default function ReceiptPage() {
       setReceiptsList(formatted);
       setSuppliers(resSuppliers.data || []);
       setWarehouses(resWarehouses.data || []);
+      setProducts(resProducts.data || []);
+      setLocations(resLocations.data || []);
     } catch (err) {
       console.error('Failed to load receipts:', err);
     } finally {
@@ -221,9 +229,12 @@ export default function ReceiptPage() {
           totalAmount: grandTotal,
           supplierId: receipt.supplier?.id || null,
           warehouseId: receipt.warehouse?.id || null,
+          destinationLocationId: receipt.destinationLocationId
+            ? Number(receipt.destinationLocationId)
+            : null,
           moNumber: receipt.moNumber || null,
           items: receipt.items.map((i) => ({
-            productId: i.productId || null,
+            productId: i.productId != null ? Number(i.productId) : null,
             name: i.productName || i.name,
             sku: i.sku || null,
             quantity: parseFloat(i.qty || i.quantity) || 1,
@@ -264,9 +275,12 @@ export default function ReceiptPage() {
         totalAmount: grandTotal,
         supplierId: receipt.supplier?.id || null,
         warehouseId: receipt.warehouse?.id || null,
+        destinationLocationId: receipt.destinationLocationId
+          ? Number(receipt.destinationLocationId)
+          : null,
         moNumber: receipt.moNumber || null,
         items: receipt.items.map((i) => ({
-          productId: i.productId || null,
+          productId: i.productId != null ? Number(i.productId) : null,
           name: i.productName || i.name,
           sku: i.sku || null,
           quantity: parseFloat(i.qty || i.quantity) || 1,
@@ -359,6 +373,7 @@ export default function ReceiptPage() {
       moNumber: '',
       supplier: suppliers[0] || null,
       warehouse: warehouses[0] || null,
+      destinationLocationId: locations[0]?.id || null,
       taxRate: 18,
       items: []
     };
@@ -368,13 +383,26 @@ export default function ReceiptPage() {
     showToast(`Draft receipt ${nextRef} initialized`);
   };
 
+  const handleCreateSupplier = async (payload) => {
+    try {
+      const res = await supplierApi.create(payload);
+      const created = res.data;
+      setSuppliers((prev) => [...prev, created]);
+      showToast(`Supplier "${created.name}" created`);
+      return created;
+    } catch (err) {
+      showToast(err.message || 'Failed to create supplier', 'error');
+      return null;
+    }
+  };
+
   // Item modifications
   const handleAddProduct = (newProduct) => {
     const qty = parseFloat(newProduct.qty) || 1;
     const cost = parseFloat(newProduct.cost) || 0;
     const item = {
       id: `temp-${Date.now()}`,
-      productId: newProduct.productId || null,
+      productId: newProduct.productId != null ? Number(newProduct.productId) : null,
       productName: newProduct.productName,
       name: newProduct.productName,
       sku: newProduct.sku || '',
@@ -744,10 +772,10 @@ export default function ReceiptPage() {
                     </div>
                   </div>
 
-                  {/* Destination Location */}
+                  {/* Warehouse */}
                   <div className="space-y-1.5">
                     <label className="block text-xs font-semibold text-slate-700">
-                      Destination (To Warehouse Location) <span className="text-rose-500">*</span>
+                      Warehouse <span className="text-rose-500">*</span>
                     </label>
                     <select
                       value={receipt.warehouse?.id || ''}
@@ -769,6 +797,33 @@ export default function ReceiptPage() {
                       {warehouses.length === 0 && (
                         <option value="">Central Stock Room (Default)</option>
                       )}
+                    </select>
+                  </div>
+
+                  {/* Destination Location */}
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-semibold text-slate-700">
+                      Destination Location <span className="text-rose-500">*</span>
+                    </label>
+                    <select
+                      value={receipt.destinationLocationId || ''}
+                      onChange={(e) => {
+                        const locId = e.target.value ? Number(e.target.value) : null;
+                        const loc = locations.find((l) => l.id === locId);
+                        setReceipt({
+                          ...receipt,
+                          destinationLocationId: locId,
+                          to: loc?.name || receipt.to
+                        });
+                      }}
+                      className="w-full px-3.5 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:bg-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all font-medium text-slate-800"
+                    >
+                      <option value="">Select destination location</option>
+                      {locations.map((loc) => (
+                        <option key={loc.id} value={loc.id}>
+                          {loc.name}
+                        </option>
+                      ))}
                     </select>
                   </div>
 
@@ -981,12 +1036,15 @@ export default function ReceiptPage() {
         isOpen={isAddProductOpen}
         onClose={() => setIsAddProductOpen(false)}
         onAddProduct={handleAddProduct}
+        products={products}
       />
 
       <SupplierModal
         isOpen={isSupplierModalOpen}
         onClose={() => setIsSupplierModalOpen(false)}
         currentSupplier={receipt.supplier}
+        suppliers={suppliers}
+        onCreateSupplier={handleCreateSupplier}
         onSelectSupplier={(selectedSup) => {
           setReceipt({
             ...receipt,

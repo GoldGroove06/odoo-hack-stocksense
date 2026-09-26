@@ -1,8 +1,7 @@
 import React, { useState } from 'react';
 import { X, Plus, Search, Package, Sparkles } from 'lucide-react';
-import { PRODUCT_CATALOG } from './receiptData';
 
-export default function AddProductModal({ isOpen, onClose, onAddProduct }) {
+export default function AddProductModal({ isOpen, onClose, onAddProduct, products = [] }) {
   const [activeTab, setActiveTab] = useState('catalog'); // 'catalog' | 'custom'
   const [searchQuery, setSearchQuery] = useState('');
   
@@ -22,15 +21,17 @@ export default function AddProductModal({ isOpen, onClose, onAddProduct }) {
 
   if (!isOpen) return null;
 
-  const filteredCatalog = PRODUCT_CATALOG.filter(item =>
-    item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    item.sku.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    item.category.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredCatalog = (products || []).filter((item) => {
+    const q = searchQuery.toLowerCase();
+    const name = (item.name || '').toLowerCase();
+    const sku = (item.sku || '').toLowerCase();
+    const category = (item.category?.name || item.category || '').toLowerCase();
+    return name.includes(q) || sku.includes(q) || category.includes(q);
+  });
 
   const handleSelectCatalog = (item) => {
     setSelectedCatalogItem(item);
-    setCatalogCost(item.defaultCost);
+    setCatalogCost(item.perUnitCost ?? item.defaultCost ?? 0);
     setCatalogQty(1);
   };
 
@@ -41,17 +42,16 @@ export default function AddProductModal({ isOpen, onClose, onAddProduct }) {
     
     onAddProduct({
       id: `item-${Date.now()}`,
-      productId: selectedCatalogItem.id,
+      productId: Number(selectedCatalogItem.id),
       productName: selectedCatalogItem.name,
-      sku: selectedCatalogItem.sku,
+      sku: selectedCatalogItem.sku || '',
       cost: cost,
-      unit: selectedCatalogItem.unit,
+      unit: selectedCatalogItem.uom?.name || selectedCatalogItem.unit || 'Units',
       qty: qty,
       receivedQty: qty,
       totalPrice: cost * qty
     });
     
-    // Reset & Close
     setSelectedCatalogItem(null);
     onClose();
   };
@@ -65,9 +65,9 @@ export default function AddProductModal({ isOpen, onClose, onAddProduct }) {
 
     onAddProduct({
       id: `item-${Date.now()}`,
-      productId: `custom-${Date.now()}`,
+      productId: null,
       productName: customProduct.name.trim(),
-      sku: customProduct.sku.trim() || `SKU-${Math.floor(1000 + Math.random() * 9000)}`,
+      sku: customProduct.sku.trim() || '',
       cost: cost,
       unit: customProduct.unit,
       qty: qty,
@@ -151,34 +151,43 @@ export default function AddProductModal({ isOpen, onClose, onAddProduct }) {
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-56 overflow-y-auto pr-1">
-                {filteredCatalog.map((item) => {
-                  const isSelected = selectedCatalogItem?.id === item.id;
-                  return (
-                    <div
-                      key={item.id}
-                      onClick={() => handleSelectCatalog(item)}
-                      className={`p-3 rounded-xl border text-left cursor-pointer transition-all ${
-                        isSelected
-                          ? 'border-indigo-600 bg-indigo-50/50 shadow-xs'
-                          : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50/60'
-                      }`}
-                    >
-                      <div className="flex items-start justify-between">
-                        <div>
-                          <p className="text-sm font-medium text-slate-800 line-clamp-1">{item.name}</p>
-                          <span className="text-xs text-slate-500 font-mono">SKU: {item.sku}</span>
+                {filteredCatalog.length === 0 ? (
+                  <p className="col-span-2 text-center text-xs text-slate-400 py-6">
+                    No products found. Load products from inventory or use Custom Item.
+                  </p>
+                ) : (
+                  filteredCatalog.map((item) => {
+                    const isSelected = selectedCatalogItem?.id === item.id;
+                    const unitCost = Number(item.perUnitCost ?? item.defaultCost ?? 0);
+                    const category = item.category?.name || item.category || 'General';
+                    const unit = item.uom?.name || item.unit || 'Units';
+                    return (
+                      <div
+                        key={item.id}
+                        onClick={() => handleSelectCatalog(item)}
+                        className={`p-3 rounded-xl border text-left cursor-pointer transition-all ${
+                          isSelected
+                            ? 'border-indigo-600 bg-indigo-50/50 shadow-xs'
+                            : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50/60'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between">
+                          <div>
+                            <p className="text-sm font-medium text-slate-800 line-clamp-1">{item.name}</p>
+                            <span className="text-xs text-slate-500 font-mono">SKU: {item.sku || '—'}</span>
+                          </div>
+                          <span className="text-xs font-semibold text-slate-700 bg-slate-100 px-2 py-0.5 rounded">
+                            ₹{unitCost.toLocaleString()}
+                          </span>
                         </div>
-                        <span className="text-xs font-semibold text-slate-700 bg-slate-100 px-2 py-0.5 rounded">
-                          ₹{item.defaultCost.toLocaleString()}
-                        </span>
+                        <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
+                          <span className="bg-slate-100 px-1.5 py-0.5 rounded text-[11px]">{category}</span>
+                          <span>Unit: {unit}</span>
+                        </div>
                       </div>
-                      <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
-                        <span className="bg-slate-100 px-1.5 py-0.5 rounded text-[11px]">{item.category}</span>
-                        <span>Unit: {item.unit}</span>
-                      </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })
+                )}
               </div>
 
               {selectedCatalogItem && (

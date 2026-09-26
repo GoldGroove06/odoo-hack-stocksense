@@ -21,7 +21,6 @@ import {
 } from 'lucide-react';
 import Navbar from '../../components/Navbar';
 import { productApi, categoryApi, uomApi, locationApi } from '../../services/api';
-import { INITIAL_STOCKS, INITIAL_LOCATIONS } from '../../data/inventoryStore';
 
 export default function Product() {
   const [products, setProducts] = useState([]);
@@ -49,8 +48,13 @@ export default function Product() {
     minStockAlert: '10',
     categoryId: '',
     uomId: '',
-    locationId: ''
+    locationId: '',
+    productKind: 'TRADING',
+    materialType: 'FINISHED_GOODS',
+    bomLines: []
   });
+  const [bomComponentId, setBomComponentId] = useState('');
+  const [bomQty, setBomQty] = useState(1);
 
   const [toastMessage, setToastMessage] = useState(null);
 
@@ -157,14 +161,24 @@ export default function Product() {
       minStockAlert: '10',
       categoryId: categories[0]?.id || '',
       uomId: uoms[0]?.id || '',
-      locationId: locations[0]?.id || ''
+      locationId: locations[0]?.id || '',
+      productKind: 'TRADING',
+      materialType: 'FINISHED_GOODS',
+      bomLines: []
     });
+    setBomComponentId('');
+    setBomQty(1);
     setIsModalOpen(true);
   };
 
   // Open Edit Product Modal
   const handleOpenEdit = (product) => {
     setEditingProduct(product);
+    const bomLines = (product.bomAsParent || product.bomLines || []).map((l) => ({
+      componentProductId: l.componentProductId || l.componentProduct?.id,
+      quantity: l.quantity || 1,
+      name: l.componentProduct?.name || l.name
+    }));
     setFormData({
       name: product.name,
       sku: product.sku,
@@ -175,14 +189,22 @@ export default function Product() {
       minStockAlert: product.minStockAlert || '10',
       categoryId: product.categoryId || product.category?.id || '',
       uomId: product.uomId || product.uom?.id || '',
-      locationId: product.locationId || product.location?.id || ''
+      locationId: product.locationId || product.location?.id || '',
+      productKind: product.productKind || 'TRADING',
+      materialType: product.materialType || 'FINISHED_GOODS',
+      bomLines
     });
+    setBomComponentId('');
+    setBomQty(1);
     setIsModalOpen(true);
   };
 
   // Submit Create or Update
   const handleSubmitForm = async (e) => {
     e.preventDefault();
+    const showBom =
+      formData.productKind === 'MANUFACTURING' &&
+      formData.materialType === 'FINISHED_GOODS';
     const payload = {
       name: formData.name.trim(),
       sku: formData.sku.trim(),
@@ -193,7 +215,15 @@ export default function Product() {
       minStockAlert: parseFloat(formData.minStockAlert) || 10.0,
       categoryId: formData.categoryId ? parseInt(formData.categoryId) : null,
       uomId: formData.uomId ? parseInt(formData.uomId) : null,
-      locationId: formData.locationId ? parseInt(formData.locationId) : null
+      locationId: formData.locationId ? parseInt(formData.locationId) : null,
+      productKind: formData.productKind,
+      materialType: formData.materialType,
+      bomLines: showBom
+        ? (formData.bomLines || []).map((l) => ({
+            componentProductId: Number(l.componentProductId),
+            quantity: Number(l.quantity) || 1
+          }))
+        : []
     };
 
     try {
@@ -449,7 +479,7 @@ export default function Product() {
                   <th className="py-3.5 px-4 w-32 text-right">Per Unit Cost (₹)</th>
                   <th className="py-3.5 px-4 w-28 text-right font-bold text-slate-800">On Hand</th>
                   <th className="py-3.5 px-4 w-28 text-right font-bold text-emerald-700">Free to Use</th>
-                  <th className="py-3.5 px-4 min-w-[160px]">Default Location</th>
+                  <th className="py-3.5 px-4 min-w-[160px]">Stock by Location</th>
                   <th className="py-3.5 px-4 w-28 text-center">Actions</th>
                 </tr>
               </thead>
@@ -531,11 +561,43 @@ export default function Product() {
                           {prod.freeToUse || prod.onHand}
                         </td>
 
-                        {/* Location */}
+                        {/* Stock by location */}
                         <td className="py-3.5 px-4 text-slate-600 text-xs">
-                          <span className="bg-slate-100 px-2 py-1 rounded-lg border border-slate-200 font-mono text-[11px] block line-clamp-1">
-                            {locationName}
-                          </span>
+                          {prod.stockQuants && prod.stockQuants.length > 0 ? (
+                            <div className="space-y-1 max-w-[200px]">
+                              {prod.stockQuants.map((q) => {
+                                const free =
+                                  q.freeQty != null
+                                    ? Number(q.freeQty)
+                                    : Math.max(
+                                        0,
+                                        (Number(q.quantity) || 0) - (Number(q.reservedQty) || 0)
+                                      );
+                                const locName =
+                                  q.location?.name || q.location?.shortcode || `Loc #${q.locationId}`;
+                                return (
+                                  <div
+                                    key={`${prod.id}-${q.locationId}`}
+                                    className="flex items-center justify-between gap-2 bg-slate-50 px-2 py-1 rounded-lg border border-slate-200"
+                                  >
+                                    <span className="font-mono text-[10px] truncate" title={locName}>
+                                      {locName}
+                                    </span>
+                                    <span className="font-semibold text-emerald-700 whitespace-nowrap">
+                                      {free}
+                                      <span className="text-slate-400 font-normal">
+                                        /{Number(q.quantity) || 0}
+                                      </span>
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <span className="bg-slate-100 px-2 py-1 rounded-lg border border-slate-200 font-mono text-[11px] block line-clamp-1">
+                              {locationName}
+                            </span>
+                          )}
                         </td>
 
                         {/* Actions (Edit / Delete) */}
@@ -723,6 +785,136 @@ export default function Product() {
                   </select>
                 </div>
               </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Product Kind</label>
+                  <select
+                    value={formData.productKind}
+                    onChange={(e) =>
+                      setFormData({
+                        ...formData,
+                        productKind: e.target.value,
+                        bomLines:
+                          e.target.value === 'MANUFACTURING' &&
+                          formData.materialType === 'FINISHED_GOODS'
+                            ? formData.bomLines
+                            : []
+                      })
+                    }
+                    className="w-full px-3.5 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none"
+                  >
+                    <option value="TRADING">Trading</option>
+                    <option value="MANUFACTURING">Manufacturing</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Material Type</label>
+                  <select
+                    value={formData.materialType}
+                    onChange={(e) =>
+                      setFormData({
+                        ...formData,
+                        materialType: e.target.value,
+                        bomLines:
+                          formData.productKind === 'MANUFACTURING' &&
+                          e.target.value === 'FINISHED_GOODS'
+                            ? formData.bomLines
+                            : []
+                      })
+                    }
+                    className="w-full px-3.5 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none"
+                  >
+                    <option value="RAW_MATERIAL">Raw Material</option>
+                    <option value="FINISHED_GOODS">Finished Goods</option>
+                  </select>
+                </div>
+              </div>
+
+              {formData.productKind === 'MANUFACTURING' &&
+                formData.materialType === 'FINISHED_GOODS' && (
+                  <div className="space-y-2 p-3 rounded-xl bg-violet-50/50 border border-violet-100">
+                    <label className="block text-xs font-semibold text-violet-900">
+                      Bill of Materials (BOM)
+                    </label>
+                    <div className="flex flex-col sm:flex-row gap-2 items-end">
+                      <div className="flex-1 w-full">
+                        <select
+                          value={bomComponentId}
+                          onChange={(e) => setBomComponentId(e.target.value)}
+                          className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg"
+                        >
+                          <option value="">Component product</option>
+                          {products
+                            .filter((p) => !editingProduct || p.id !== editingProduct.id)
+                            .map((p) => (
+                              <option key={p.id} value={p.id}>
+                                {p.name} ({p.sku})
+                              </option>
+                            ))}
+                        </select>
+                      </div>
+                      <input
+                        type="number"
+                        min="0.01"
+                        step="any"
+                        value={bomQty}
+                        onChange={(e) => setBomQty(e.target.value)}
+                        className="w-full sm:w-20 px-2 py-1.5 text-xs bg-white border border-slate-200 rounded-lg font-mono"
+                        placeholder="Qty"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!bomComponentId) return;
+                          const comp = products.find((p) => p.id === Number(bomComponentId));
+                          setFormData({
+                            ...formData,
+                            bomLines: [
+                              ...(formData.bomLines || []),
+                              {
+                                componentProductId: Number(bomComponentId),
+                                quantity: parseFloat(bomQty) || 1,
+                                name: comp?.name || `Product #${bomComponentId}`
+                              }
+                            ]
+                          });
+                          setBomComponentId('');
+                          setBomQty(1);
+                        }}
+                        className="px-2.5 py-1.5 text-xs font-semibold text-violet-700 bg-white border border-violet-200 rounded-lg cursor-pointer"
+                      >
+                        Add
+                      </button>
+                    </div>
+                    {(formData.bomLines || []).length > 0 && (
+                      <ul className="space-y-1">
+                        {formData.bomLines.map((line, idx) => (
+                          <li
+                            key={`${line.componentProductId}-${idx}`}
+                            className="flex items-center justify-between text-xs text-slate-700 bg-white rounded-lg px-2.5 py-1.5 border border-slate-100"
+                          >
+                            <span>
+                              {line.name || `Product #${line.componentProductId}`} × {line.quantity}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setFormData({
+                                  ...formData,
+                                  bomLines: formData.bomLines.filter((_, i) => i !== idx)
+                                })
+                              }
+                              className="text-rose-500 hover:text-rose-700 cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">Description / Notes</label>

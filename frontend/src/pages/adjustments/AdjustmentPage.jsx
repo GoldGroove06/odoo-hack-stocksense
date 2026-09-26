@@ -19,8 +19,11 @@ import {
 } from 'lucide-react';
 import Navbar from '../../components/Navbar';
 import { adjustmentApi, productApi, locationApi } from '../../services/api';
+import { useAuth } from '../../context/AuthContext';
 
 export default function AdjustmentPage() {
+  const { user } = useAuth();
+  const canValidate = user?.role === 'OWNER' || user?.role === 'INVENTORY_MANAGER';
   const [adjustments, setAdjustments] = useState([]);
   const [products, setProducts] = useState([]);
   const [locations, setLocations] = useState([]);
@@ -330,15 +333,19 @@ export default function AdjustmentPage() {
                         <td className="py-3.5 px-4 text-center">
                           <div className="flex items-center justify-center gap-1.5">
                             {!isDone ? (
-                              <button
-                                type="button"
-                                onClick={() => handleApplyAdjustment(adj.id, adj.reference)}
-                                className="px-3 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-xs font-semibold transition-all shadow-2xs flex items-center gap-1 cursor-pointer"
-                                title="Apply adjustment and update stock"
-                              >
-                                <Check className="w-3.5 h-3.5" />
-                                Apply
-                              </button>
+                              canValidate ? (
+                                <button
+                                  type="button"
+                                  onClick={() => handleApplyAdjustment(adj.id, adj.reference)}
+                                  className="px-3 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-xs font-semibold transition-all shadow-2xs flex items-center gap-1 cursor-pointer"
+                                  title="Apply adjustment and update stock"
+                                >
+                                  <Check className="w-3.5 h-3.5" />
+                                  Apply
+                                </button>
+                              ) : (
+                                <span className="text-xs text-amber-700 font-medium">Awaiting approval</span>
+                              )
                             ) : (
                               <span className="text-xs text-emerald-700 font-semibold flex items-center gap-1">
                                 <CheckCircle2 className="w-4 h-4 text-emerald-600" />

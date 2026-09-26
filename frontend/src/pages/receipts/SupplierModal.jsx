@@ -1,27 +1,66 @@
-import React, { useState } from 'react';
-import { X, Building2, Check, UserCheck } from 'lucide-react';
-import { SAMPLE_SUPPLIERS } from './receiptData';
+import React, { useState, useEffect } from 'react';
+import { X, Building2, Check, UserCheck, Loader2 } from 'lucide-react';
 
-export default function SupplierModal({ isOpen, onClose, currentSupplier, onSelectSupplier }) {
+export default function SupplierModal({
+  isOpen,
+  onClose,
+  currentSupplier,
+  onSelectSupplier,
+  suppliers = [],
+  onCreateSupplier
+}) {
   const [activeMode, setActiveMode] = useState('select'); // 'select' | 'custom'
-  const [formData, setFormData] = useState(currentSupplier || {
+  const [saving, setSaving] = useState(false);
+  const [formData, setFormData] = useState({
     name: '',
     gstNumber: '',
     phone: '',
     email: '',
     address: '',
-    city: '',
-    state: '',
-    pincode: '',
     contactPerson: ''
   });
 
+  useEffect(() => {
+    if (isOpen) {
+      setFormData({
+        name: currentSupplier?.name || '',
+        gstNumber: currentSupplier?.gstNumber || '',
+        phone: currentSupplier?.phone || '',
+        email: currentSupplier?.email || '',
+        address: currentSupplier?.address || '',
+        contactPerson: currentSupplier?.contactPerson || ''
+      });
+    }
+  }, [isOpen, currentSupplier]);
+
   if (!isOpen) return null;
 
-  const handleSave = (e) => {
+  const handleSave = async (e) => {
     e.preventDefault();
-    onSelectSupplier(formData);
-    onClose();
+    if (!formData.name.trim()) return;
+
+    if (onCreateSupplier) {
+      setSaving(true);
+      try {
+        const created = await onCreateSupplier({
+          name: formData.name.trim(),
+          gstNumber: formData.gstNumber || null,
+          phone: formData.phone || null,
+          email: formData.email || null,
+          address: formData.address || null,
+          contactPerson: formData.contactPerson || null
+        });
+        if (created) {
+          onSelectSupplier(created);
+          onClose();
+        }
+      } finally {
+        setSaving(false);
+      }
+    } else {
+      onSelectSupplier(formData);
+      onClose();
+    }
   };
 
   const handleSelectPreset = (sup) => {
@@ -40,7 +79,7 @@ export default function SupplierModal({ isOpen, onClose, currentSupplier, onSele
             </div>
             <div>
               <h3 className="font-semibold text-slate-800 text-base">Supplier Information</h3>
-              <p className="text-xs text-slate-500">Select an existing vendor or edit receipt supplier details</p>
+              <p className="text-xs text-slate-500">Select an existing vendor or create a new supplier</p>
             </div>
           </div>
           <button
@@ -73,7 +112,7 @@ export default function SupplierModal({ isOpen, onClose, currentSupplier, onSele
                 : 'border-transparent text-slate-500 hover:text-slate-700'
             }`}
           >
-            Edit / Custom Supplier Details
+            Create New Supplier
           </button>
         </div>
 
@@ -81,37 +120,43 @@ export default function SupplierModal({ isOpen, onClose, currentSupplier, onSele
         <div className="p-6 overflow-y-auto flex-1">
           {activeMode === 'select' ? (
             <div className="space-y-3">
-              {SAMPLE_SUPPLIERS.map((sup) => {
-                const isCurrent = currentSupplier?.id === sup.id || currentSupplier?.name === sup.name;
-                return (
-                  <div
-                    key={sup.id}
-                    onClick={() => handleSelectPreset(sup)}
-                    className={`p-4 rounded-xl border text-left cursor-pointer transition-all ${
-                      isCurrent
-                        ? 'border-indigo-600 bg-indigo-50/40 shadow-xs ring-1 ring-indigo-500'
-                        : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'
-                    }`}
-                  >
-                    <div className="flex items-start justify-between">
-                      <div>
-                        <h4 className="text-sm font-semibold text-slate-800">{sup.name}</h4>
-                        <p className="text-xs text-slate-500 mt-0.5">{sup.address}, {sup.city}, {sup.state} - {sup.pincode}</p>
+              {suppliers.length === 0 ? (
+                <p className="text-center text-xs text-slate-400 py-8">
+                  No suppliers yet. Create one using the tab above.
+                </p>
+              ) : (
+                suppliers.map((sup) => {
+                  const isCurrent = currentSupplier?.id === sup.id || currentSupplier?.name === sup.name;
+                  return (
+                    <div
+                      key={sup.id}
+                      onClick={() => handleSelectPreset(sup)}
+                      className={`p-4 rounded-xl border text-left cursor-pointer transition-all ${
+                        isCurrent
+                          ? 'border-indigo-600 bg-indigo-50/40 shadow-xs ring-1 ring-indigo-500'
+                          : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between">
+                        <div>
+                          <h4 className="text-sm font-semibold text-slate-800">{sup.name}</h4>
+                          <p className="text-xs text-slate-500 mt-0.5">{sup.address || 'No address on file'}</p>
+                        </div>
+                        {isCurrent && (
+                          <span className="flex items-center gap-1 text-xs font-semibold text-indigo-600 bg-indigo-100 px-2 py-0.5 rounded-full">
+                            <Check className="w-3.5 h-3.5" /> Selected
+                          </span>
+                        )}
                       </div>
-                      {isCurrent && (
-                        <span className="flex items-center gap-1 text-xs font-semibold text-indigo-600 bg-indigo-100 px-2 py-0.5 rounded-full">
-                          <Check className="w-3.5 h-3.5" /> Selected
-                        </span>
-                      )}
+                      <div className="mt-2.5 pt-2 border-t border-slate-100 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600 font-mono">
+                        {sup.gstNumber && <span><strong>GSTIN:</strong> {sup.gstNumber}</span>}
+                        {sup.phone && <span><strong>Phone:</strong> {sup.phone}</span>}
+                        {sup.contactPerson && <span><strong>Contact:</strong> {sup.contactPerson}</span>}
+                      </div>
                     </div>
-                    <div className="mt-2.5 pt-2 border-t border-slate-100 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600 font-mono">
-                      <span><strong>GSTIN:</strong> {sup.gstNumber}</span>
-                      <span><strong>Phone:</strong> {sup.phone}</span>
-                      <span><strong>Contact:</strong> {sup.contactPerson}</span>
-                    </div>
-                  </div>
-                );
-              })}
+                  );
+                })
+              )}
             </div>
           ) : (
             <form id="supplier-form" onSubmit={handleSave} className="space-y-4">
@@ -129,10 +174,9 @@ export default function SupplierModal({ isOpen, onClose, currentSupplier, onSele
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">GST Number (GSTIN) *</label>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">GST Number (GSTIN)</label>
                   <input
                     type="text"
-                    required
                     value={formData.gstNumber}
                     onChange={(e) => setFormData({ ...formData, gstNumber: e.target.value.toUpperCase() })}
                     placeholder="e.g. 27AAACT2727Q1ZR"
@@ -184,39 +228,6 @@ export default function SupplierModal({ isOpen, onClose, currentSupplier, onSele
                   className="w-full px-3.5 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:bg-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
                 />
               </div>
-
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">City</label>
-                  <input
-                    type="text"
-                    value={formData.city || ''}
-                    onChange={(e) => setFormData({ ...formData, city: e.target.value })}
-                    placeholder="City"
-                    className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:bg-white focus:border-indigo-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">State</label>
-                  <input
-                    type="text"
-                    value={formData.state || ''}
-                    onChange={(e) => setFormData({ ...formData, state: e.target.value })}
-                    placeholder="State"
-                    className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:bg-white focus:border-indigo-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">PIN / Zip</label>
-                  <input
-                    type="text"
-                    value={formData.pincode || ''}
-                    onChange={(e) => setFormData({ ...formData, pincode: e.target.value })}
-                    placeholder="400001"
-                    className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:bg-white focus:border-indigo-500"
-                  />
-                </div>
-              </div>
             </form>
           )}
         </div>
@@ -234,10 +245,11 @@ export default function SupplierModal({ isOpen, onClose, currentSupplier, onSele
             <button
               type="submit"
               form="supplier-form"
-              className="px-5 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-xs transition-colors flex items-center gap-2"
+              disabled={saving}
+              className="px-5 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 rounded-lg shadow-xs transition-colors flex items-center gap-2"
             >
-              <UserCheck className="w-4 h-4" />
-              Save Supplier Details
+              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <UserCheck className="w-4 h-4" />}
+              {saving ? 'Saving...' : 'Create & Select Supplier'}
             </button>
           )}
         </div>

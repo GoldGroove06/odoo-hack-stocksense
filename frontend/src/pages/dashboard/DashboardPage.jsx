@@ -22,8 +22,11 @@ import {
 } from 'lucide-react';
 import Navbar from '../../components/Navbar';
 import { dashboardApi, productApi, warehouseApi, receiptApi, deliveryApi } from '../../services/api';
+import { useAuth } from '../../context/AuthContext';
 
 export default function DashboardPage() {
+  const { user } = useAuth();
+  const isStaff = user?.role === 'WAREHOUSE_STAFF';
   const [stats, setStats] = useState(null);
   const [products, setProducts] = useState([]);
   const [warehouses, setWarehouses] = useState([]);
@@ -122,20 +125,24 @@ export default function DashboardPage() {
             >
               <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-indigo-600' : ''}`} />
             </button>
-            <a
-              href="/receipts"
-              className="px-3.5 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              New Receipt
-            </a>
-            <a
-              href="/deliveries"
-              className="px-3.5 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              New Delivery
-            </a>
+            {!isStaff && (
+              <>
+                <a
+                  href="/receipts"
+                  className="px-3.5 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  New Receipt
+                </a>
+                <a
+                  href="/deliveries"
+                  className="px-3.5 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  New Delivery
+                </a>
+              </>
+            )}
             <a
               href="/adjustments"
               className="px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 rounded-xl shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
@@ -326,7 +333,11 @@ export default function DashboardPage() {
               {warehousesCount} <span className="text-xs font-normal text-slate-500">Facilities</span>
             </div>
             <p className="text-xs text-slate-500 mt-1">
-              <a href="/settings/warehouses" className="text-indigo-600 hover:underline">Manage facilities &rarr;</a>
+              {!isStaff ? (
+                <a href="/settings/warehouses" className="text-indigo-600 hover:underline">Manage facilities &rarr;</a>
+              ) : (
+                <span>{warehousesCount} warehouse{warehousesCount === 1 ? '' : 's'} online</span>
+              )}
             </p>
           </div>
 

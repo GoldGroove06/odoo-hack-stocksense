@@ -21,7 +21,6 @@ import {
 } from 'lucide-react';
 import Navbar from '../../components/Navbar';
 import { productApi, categoryApi, locationApi } from '../../services/api';
-import { INITIAL_STOCKS, INITIAL_LOCATIONS } from '../../data/inventoryStore';
 
 export default function StockPage() {
   const [stocks, setStocks] = useState([]);
@@ -44,8 +43,13 @@ export default function StockPage() {
     unit: 'Units',
     perUnitCost: '',
     onHand: '',
-    location: ''
+    locationId: '',
+    productKind: 'TRADING',
+    materialType: 'FINISHED_GOODS',
+    bomLines: []
   });
+  const [bomComponentId, setBomComponentId] = useState('');
+  const [bomQty, setBomQty] = useState(1);
 
   const [toastMessage, setToastMessage] = useState(null);
 
@@ -62,19 +66,36 @@ export default function StockPage() {
       try {
         const prodRes = await productApi.getAll();
         if (prodRes && Array.isArray(prodRes.data)) {
-          const mapped = prodRes.data.map((p) => ({
-            id: p.id,
-            name: p.name,
-            sku: p.sku,
-            category: p.category?.name || p.category || 'General',
-            unit: p.uom?.name || p.unit || 'Units',
-            perUnitCost: Number(p.perUnitCost) || 0,
-            onHand: Number(p.onHand) || 0,
-            reserved: Number(p.reserved) || 0,
-            freeToUse: Number(p.freeToUse ?? p.onHand) || 0,
-            location: p.location?.name || p.location || 'Unassigned',
-            minStockAlert: Number(p.minStockAlert) || 10
-          }));
+          const mapped = prodRes.data.map((p) => {
+            const quants = (p.stockQuants || []).map((q) => ({
+              locationId: q.locationId,
+              locationName: q.location?.name || q.location?.shortcode || `Loc #${q.locationId}`,
+              quantity: Number(q.quantity) || 0,
+              reservedQty: Number(q.reservedQty) || 0,
+              freeQty:
+                q.freeQty != null
+                  ? Number(q.freeQty)
+                  : Math.max(0, (Number(q.quantity) || 0) - (Number(q.reservedQty) || 0))
+            }));
+            const reserved = quants.reduce((s, q) => s + q.reservedQty, 0);
+            return {
+              id: p.id,
+              name: p.name,
+              sku: p.sku,
+              category: p.category?.name || p.category || 'General',
+              unit: p.uom?.name || p.unit || 'Units',
+              perUnitCost: Number(p.perUnitCost) || 0,
+              onHand: Number(p.onHand) || 0,
+              reserved,
+              freeToUse: Number(p.freeToUse ?? p.onHand) || 0,
+              location: p.location?.name || p.location || 'Unassigned',
+              locationId: p.locationId || p.location?.id || null,
+              stockQuants: quants,
+              productKind: p.productKind || 'TRADING',
+              materialType: p.materialType || 'FINISHED_GOODS',
+              minStockAlert: Number(p.minStockAlert) || 10
+            };
+          });
           setStocks(mapped);
         } else {
           setStocks([]);
@@ -89,8 +110,8 @@ export default function StockPage() {
         const locRes = await locationApi.getAll();
         if (locRes && Array.isArray(locRes.data)) {
           setLocations(locRes.data);
-          if (!newProduct.location && locRes.data.length > 0) {
-            setNewProduct((prev) => ({ ...prev, location: locRes.data[0].name }));
+          if (!newProduct.locationId && locRes.data.length > 0) {
+            setNewProduct((prev) => ({ ...prev, locationId: String(locRes.data[0].id) }));
           }
         } else {
           setLocations([]);
@@ -174,6 +195,12 @@ export default function StockPage() {
     const onHand = parseFloat(newProduct.onHand) || 0;
     const cost = parseFloat(newProduct.perUnitCost) || 0;
     const sku = newProduct.sku.trim() || `SKU-${Math.floor(1000 + Math.random() * 9000)}`;
+    const locationId = newProduct.locationId ? Number(newProduct.locationId) : null;
+    const locName = locations.find((l) => l.id === locationId)?.name || 'Unassigned';
+
+    const showBom =
+      newProduct.productKind === 'MANUFACTURING' &&
+      newProduct.materialType === 'FINISHED_GOODS';
 
     const payload = {
       name: newProduct.name.trim(),
@@ -181,7 +208,16 @@ export default function StockPage() {
       perUnitCost: cost,
       onHand: onHand,
       freeToUse: onHand,
-      minStockAlert: 10
+      minStockAlert: 10,
+      locationId,
+      productKind: newProduct.productKind,
+      materialType: newProduct.materialType,
+      bomLines: showBom
+        ? (newProduct.bomLines || []).map((l) => ({
+            componentProductId: Number(l.componentProductId),
+            quantity: Number(l.quantity) || 1
+          }))
+        : []
     };
 
     let newItem = {
@@ -194,7 +230,10 @@ export default function StockPage() {
       onHand: onHand,
       reserved: 0,
       freeToUse: onHand,
-      location: newProduct.location || (locations[0]?.name || 'Central WH'),
+      location: locName,
+      locationId,
+      productKind: newProduct.productKind,
+      materialType: newProduct.materialType,
       minStockAlert: 10
     };
 
@@ -207,11 +246,16 @@ export default function StockPage() {
           sku: res.data.sku,
           category: res.data.category?.name || newProduct.category,
           unit: res.data.uom?.name || newProduct.unit,
-          location: res.data.location?.name || newProduct.location
+          location: res.data.location?.name || locName,
+          locationId: res.data.locationId || locationId,
+          productKind: res.data.productKind || newProduct.productKind,
+          materialType: res.data.materialType || newProduct.materialType
         };
       }
     } catch (err) {
       console.warn('API create fallback to local state:', err.message);
+      showToast(err.message || 'Failed to create product', 'error');
+      return;
     }
 
     setStocks([newItem, ...stocks]);
@@ -223,8 +267,13 @@ export default function StockPage() {
       unit: 'Units',
       perUnitCost: '',
       onHand: '',
-      location: locations[0]?.name || INITIAL_LOCATIONS[0].name
+      locationId: locations[0] ? String(locations[0].id) : '',
+      productKind: 'TRADING',
+      materialType: 'FINISHED_GOODS',
+      bomLines: []
     });
+    setBomComponentId('');
+    setBomQty(1);
     showToast(`Added new stock item "${newItem.name}"`);
   };
 
@@ -383,7 +432,7 @@ export default function StockPage() {
                   <th className="py-3.5 px-4 w-32 text-right">Per Unit Cost (₹)</th>
                   <th className="py-3.5 px-4 w-32 text-right font-bold text-slate-800">On Hand</th>
                   <th className="py-3.5 px-4 w-32 text-right font-bold text-emerald-700">Free to Use</th>
-                  <th className="py-3.5 px-4 min-w-[180px]">Location</th>
+                  <th className="py-3.5 px-4 min-w-[180px]">Stock by Location (free/on hand)</th>
                   <th className="py-3.5 px-4 w-36 text-center">Actions</th>
                 </tr>
               </thead>
@@ -459,11 +508,30 @@ export default function StockPage() {
                           )}
                         </td>
 
-                        {/* Location */}
+                        {/* Location / Availability per bay */}
                         <td className="py-3.5 px-4 text-slate-600 text-xs">
-                          <span className="bg-slate-100 px-2 py-1 rounded-lg border border-slate-200 font-mono text-[11px] block line-clamp-1">
-                            {stk.location}
-                          </span>
+                          {stk.stockQuants && stk.stockQuants.length > 0 ? (
+                            <div className="space-y-1 max-w-[220px]">
+                              {stk.stockQuants.map((q) => (
+                                <div
+                                  key={`${stk.id}-${q.locationId}`}
+                                  className="flex items-center justify-between gap-2 bg-slate-50 px-2 py-1 rounded-lg border border-slate-200"
+                                >
+                                  <span className="font-mono text-[10px] text-slate-600 truncate" title={q.locationName}>
+                                    {q.locationName}
+                                  </span>
+                                  <span className="font-semibold text-emerald-700 whitespace-nowrap">
+                                    {q.freeQty}
+                                    <span className="text-slate-400 font-normal">/{q.quantity}</span>
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <span className="bg-slate-100 px-2 py-1 rounded-lg border border-slate-200 font-mono text-[11px] block line-clamp-1">
+                              {stk.location || 'No stock locations'}
+                            </span>
+                          )}
                         </td>
 
                         {/* Actions: Update Stock & Delete */}
@@ -709,20 +777,149 @@ export default function StockPage() {
                 </div>
               </div>
 
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">Product Kind</label>
+                  <select
+                    value={newProduct.productKind}
+                    onChange={(e) =>
+                      setNewProduct({
+                        ...newProduct,
+                        productKind: e.target.value,
+                        bomLines:
+                          e.target.value === 'MANUFACTURING' &&
+                          newProduct.materialType === 'FINISHED_GOODS'
+                            ? newProduct.bomLines
+                            : []
+                      })
+                    }
+                    className="w-full px-3.5 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none"
+                  >
+                    <option value="TRADING">Trading</option>
+                    <option value="MANUFACTURING">Manufacturing</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">Material Type</label>
+                  <select
+                    value={newProduct.materialType}
+                    onChange={(e) =>
+                      setNewProduct({
+                        ...newProduct,
+                        materialType: e.target.value,
+                        bomLines:
+                          newProduct.productKind === 'MANUFACTURING' &&
+                          e.target.value === 'FINISHED_GOODS'
+                            ? newProduct.bomLines
+                            : []
+                      })
+                    }
+                    className="w-full px-3.5 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none"
+                  >
+                    <option value="RAW_MATERIAL">Raw Material</option>
+                    <option value="FINISHED_GOODS">Finished Goods</option>
+                  </select>
+                </div>
+              </div>
+
               <div>
                 <label className="block text-xs font-medium text-slate-700 mb-1">Warehouse Storage Location</label>
                 <select
-                  value={newProduct.location}
-                  onChange={(e) => setNewProduct({ ...newProduct, location: e.target.value })}
+                  value={newProduct.locationId}
+                  onChange={(e) => setNewProduct({ ...newProduct, locationId: e.target.value })}
                   className="w-full px-3.5 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none text-xs"
                 >
-                  {INITIAL_LOCATIONS.map((loc) => (
-                    <option key={loc.id} value={loc.name}>
+                  <option value="">Select location</option>
+                  {locations.map((loc) => (
+                    <option key={loc.id} value={loc.id}>
                       {loc.name}
                     </option>
                   ))}
                 </select>
               </div>
+
+              {newProduct.productKind === 'MANUFACTURING' &&
+                newProduct.materialType === 'FINISHED_GOODS' && (
+                  <div className="space-y-2 p-3 rounded-xl bg-violet-50/50 border border-violet-100">
+                    <label className="block text-xs font-semibold text-violet-900">
+                      Bill of Materials (BOM)
+                    </label>
+                    <div className="flex gap-2 items-end">
+                      <div className="flex-1">
+                        <select
+                          value={bomComponentId}
+                          onChange={(e) => setBomComponentId(e.target.value)}
+                          className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg"
+                        >
+                          <option value="">Component product</option>
+                          {stocks.map((s) => (
+                            <option key={s.id} value={s.id}>
+                              {s.name} ({s.sku})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <input
+                        type="number"
+                        min="0.01"
+                        step="any"
+                        value={bomQty}
+                        onChange={(e) => setBomQty(e.target.value)}
+                        className="w-20 px-2 py-1.5 text-xs bg-white border border-slate-200 rounded-lg font-mono"
+                        placeholder="Qty"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!bomComponentId) return;
+                          const comp = stocks.find((s) => s.id === Number(bomComponentId));
+                          setNewProduct({
+                            ...newProduct,
+                            bomLines: [
+                              ...(newProduct.bomLines || []),
+                              {
+                                componentProductId: Number(bomComponentId),
+                                quantity: parseFloat(bomQty) || 1,
+                                name: comp?.name || `Product #${bomComponentId}`
+                              }
+                            ]
+                          });
+                          setBomComponentId('');
+                          setBomQty(1);
+                        }}
+                        className="px-2.5 py-1.5 text-xs font-semibold text-violet-700 bg-white border border-violet-200 rounded-lg cursor-pointer"
+                      >
+                        Add
+                      </button>
+                    </div>
+                    {(newProduct.bomLines || []).length > 0 && (
+                      <ul className="space-y-1">
+                        {newProduct.bomLines.map((line, idx) => (
+                          <li
+                            key={`${line.componentProductId}-${idx}`}
+                            className="flex items-center justify-between text-xs text-slate-700 bg-white rounded-lg px-2.5 py-1.5 border border-slate-100"
+                          >
+                            <span>
+                              {line.name || `Product #${line.componentProductId}`} × {line.quantity}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setNewProduct({
+                                  ...newProduct,
+                                  bomLines: newProduct.bomLines.filter((_, i) => i !== idx)
+                                })
+                              }
+                              className="text-rose-500 hover:text-rose-700 cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
 
               <div className="pt-3 border-t border-slate-100 flex justify-end gap-2">
                 <button

@@ -1,93 +1,119 @@
 import React, { useState } from 'react';
-import { X, Plus, Search, Package, Sparkles } from 'lucide-react';
-import { DELIVERY_PRODUCT_CATALOG } from './deliveryData';
+import { X, Plus, Search, Package, AlertTriangle } from 'lucide-react';
 
-export default function AddDeliveryProductModal({ isOpen, onClose, onAddProduct }) {
-  const [activeTab, setActiveTab] = useState('catalog');
+function freeQtyAtLocation(product, locationId) {
+  if (!locationId || !product) return 0;
+  const quants = product.stockQuants || [];
+  const q = quants.find((sq) => Number(sq.locationId) === Number(locationId));
+  if (!q) return 0;
+  if (q.freeQty != null) return Math.max(0, Number(q.freeQty));
+  return Math.max(0, (Number(q.quantity) || 0) - (Number(q.reservedQty) || 0));
+}
+
+export default function AddDeliveryProductModal({
+  isOpen,
+  onClose,
+  onAddProduct,
+  products = [],
+  sourceLocationId = null
+}) {
   const [searchQuery, setSearchQuery] = useState('');
-
-  // Custom product state
-  const [customProduct, setCustomProduct] = useState({
-    name: '',
-    sku: '',
-    cost: '',
-    unit: 'Units',
-    qty: 1
-  });
-
-  // Selected catalog item
   const [selectedCatalogItem, setSelectedCatalogItem] = useState(null);
   const [catalogQty, setCatalogQty] = useState(1);
   const [catalogCost, setCatalogCost] = useState('');
+  const [error, setError] = useState(null);
 
   if (!isOpen) return null;
 
-  const filteredCatalog = DELIVERY_PRODUCT_CATALOG.filter(item =>
-    item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    item.sku.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    item.category.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  if (!sourceLocationId) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-xs p-4">
+        <div className="bg-white w-full max-w-md rounded-2xl shadow-xl border border-slate-200 p-6 space-y-4">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center">
+              <AlertTriangle className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-slate-800 text-base">Select source location first</h3>
+              <p className="text-xs text-slate-500 mt-1">
+                You can only ship stock that exists at a location. Choose the source bay/rack on the delivery form, then add products.
+              </p>
+            </div>
+          </div>
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg cursor-pointer"
+            >
+              OK
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const filteredCatalog = (products || []).filter((item) => {
+    const q = searchQuery.toLowerCase();
+    const name = (item.name || '').toLowerCase();
+    const sku = (item.sku || '').toLowerCase();
+    const category = (item.category?.name || item.category || '').toLowerCase();
+    return name.includes(q) || sku.includes(q) || category.includes(q);
+  });
+
+  const selectedAvailable = selectedCatalogItem
+    ? freeQtyAtLocation(selectedCatalogItem, sourceLocationId)
+    : 0;
 
   const handleSelectCatalog = (item) => {
     setSelectedCatalogItem(item);
-    setCatalogCost(item.defaultPrice);
-    setCatalogQty(1);
+    setCatalogCost(item.perUnitCost ?? item.defaultPrice ?? 0);
+    const avail = freeQtyAtLocation(item, sourceLocationId);
+    setCatalogQty(avail > 0 ? Math.min(1, avail) : 0);
+    setError(null);
   };
 
   const handleAddCatalogProduct = () => {
     if (!selectedCatalogItem) return;
     const cost = parseFloat(catalogCost) || 0;
-    const qty = parseFloat(catalogQty) || 1;
+    let qty = parseFloat(catalogQty) || 0;
+    const available = freeQtyAtLocation(selectedCatalogItem, sourceLocationId);
+
+    if (available <= 0) {
+      setError(`No available stock for ${selectedCatalogItem.name} at this location`);
+      return;
+    }
+    if (qty > available) {
+      setError(`Only ${available} available — cannot ship ${qty}`);
+      return;
+    }
+    if (qty <= 0) {
+      setError('Quantity must be at least 1');
+      return;
+    }
 
     onAddProduct({
       id: `del-item-${Date.now()}`,
-      productId: selectedCatalogItem.id,
+      productId: Number(selectedCatalogItem.id),
       productName: selectedCatalogItem.name,
-      sku: selectedCatalogItem.sku,
-      cost: cost,
-      unit: selectedCatalogItem.unit,
-      qty: qty,
+      sku: selectedCatalogItem.sku || '',
+      cost,
+      unit: selectedCatalogItem.uom?.name || selectedCatalogItem.unit || 'Units',
+      qty,
       doneQty: qty,
-      totalPrice: cost * qty
+      totalPrice: cost * qty,
+      availableQty: available
     });
 
     setSelectedCatalogItem(null);
-    onClose();
-  };
-
-  const handleAddCustomProduct = (e) => {
-    e.preventDefault();
-    if (!customProduct.name.trim()) return;
-
-    const cost = parseFloat(customProduct.cost) || 0;
-    const qty = parseFloat(customProduct.qty) || 1;
-
-    onAddProduct({
-      id: `del-item-${Date.now()}`,
-      productId: `custom-${Date.now()}`,
-      productName: customProduct.name.trim(),
-      sku: customProduct.sku.trim() || `SKU-${Math.floor(1000 + Math.random() * 9000)}`,
-      cost: cost,
-      unit: customProduct.unit,
-      qty: qty,
-      doneQty: qty,
-      totalPrice: cost * qty
-    });
-
-    setCustomProduct({
-      name: '',
-      sku: '',
-      cost: '',
-      unit: 'Units',
-      qty: 1
-    });
+    setError(null);
     onClose();
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-xs p-4 animate-in fade-in duration-150">
       <div className="bg-white w-full max-w-2xl rounded-2xl shadow-xl border border-slate-200 overflow-hidden flex flex-col max-h-[90vh]">
-        {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-slate-50/50">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center font-semibold">
@@ -95,7 +121,9 @@ export default function AddDeliveryProductModal({ isOpen, onClose, onAddProduct 
             </div>
             <div>
               <h3 className="font-semibold text-slate-800 text-base">Add Product to Delivery</h3>
-              <p className="text-xs text-slate-500">Pick dispatch goods with unit price, demand quantity, and unit</p>
+              <p className="text-xs text-slate-500">
+                Only products with free stock at the source location can be shipped
+              </p>
             </div>
           </div>
           <button
@@ -106,200 +134,120 @@ export default function AddDeliveryProductModal({ isOpen, onClose, onAddProduct 
           </button>
         </div>
 
-        {/* Tab Switcher */}
-        <div className="flex border-b border-slate-200 px-6 bg-white gap-6">
-          <button
-            type="button"
-            onClick={() => setActiveTab('catalog')}
-            className={`py-3 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 cursor-pointer ${
-              activeTab === 'catalog'
-                ? 'border-emerald-600 text-emerald-600'
-                : 'border-transparent text-slate-500 hover:text-slate-700'
-            }`}
-          >
-            <Package className="w-4 h-4" />
-            Product Catalog
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('custom')}
-            className={`py-3 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 cursor-pointer ${
-              activeTab === 'custom'
-                ? 'border-emerald-600 text-emerald-600'
-                : 'border-transparent text-slate-500 hover:text-slate-700'
-            }`}
-          >
-            <Sparkles className="w-4 h-4" />
-            Custom Delivery Item
-          </button>
-        </div>
+        <div className="p-6 overflow-y-auto flex-1 space-y-4">
+          {error && (
+            <div className="px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700 flex items-center gap-2">
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+              {error}
+            </div>
+          )}
 
-        {/* Content */}
-        <div className="p-6 overflow-y-auto flex-1">
-          {activeTab === 'catalog' ? (
-            <div className="space-y-4">
-              <div className="relative">
-                <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-                <input
-                  type="text"
-                  placeholder="Search dispatch items, SKU, or category..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
-                />
-              </div>
+          <div className="relative">
+            <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              type="text"
+              placeholder="Search products, SKU, or category..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-10 pr-4 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
+            />
+          </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-56 overflow-y-auto pr-1">
-                {filteredCatalog.map((item) => {
-                  const isSelected = selectedCatalogItem?.id === item.id;
-                  return (
-                    <div
-                      key={item.id}
-                      onClick={() => handleSelectCatalog(item)}
-                      className={`p-3 rounded-xl border text-left cursor-pointer transition-all ${
-                        isSelected
-                          ? 'border-emerald-600 bg-emerald-50/50 shadow-xs ring-1 ring-emerald-500'
-                          : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'
-                      }`}
-                    >
-                      <div className="flex items-start justify-between">
-                        <div>
-                          <p className="text-sm font-medium text-slate-800 line-clamp-1">{item.name}</p>
-                          <span className="text-xs text-slate-500 font-mono">SKU: {item.sku}</span>
-                        </div>
-                        <span className="text-xs font-semibold text-slate-700 bg-slate-100 px-2 py-0.5 rounded">
-                          ₹{item.defaultPrice.toLocaleString()}
-                        </span>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-56 overflow-y-auto pr-1">
+            {filteredCatalog.length === 0 ? (
+              <p className="col-span-2 text-center text-xs text-slate-400 py-6">No products found.</p>
+            ) : (
+              filteredCatalog.map((item) => {
+                const isSelected = selectedCatalogItem?.id === item.id;
+                const unitCost = Number(item.perUnitCost ?? item.defaultPrice ?? 0);
+                const category = item.category?.name || item.category || 'General';
+                const available = freeQtyAtLocation(item, sourceLocationId);
+                const outOfStock = available <= 0;
+                return (
+                  <div
+                    key={item.id}
+                    onClick={() => !outOfStock && handleSelectCatalog(item)}
+                    className={`p-3 rounded-xl border text-left transition-all ${
+                      outOfStock
+                        ? 'border-slate-100 bg-slate-50 opacity-60 cursor-not-allowed'
+                        : isSelected
+                          ? 'border-emerald-600 bg-emerald-50/50 shadow-xs ring-1 ring-emerald-500 cursor-pointer'
+                          : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50 cursor-pointer'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <p className="text-sm font-medium text-slate-800 line-clamp-1">{item.name}</p>
+                        <span className="text-xs text-slate-500 font-mono">SKU: {item.sku || '—'}</span>
                       </div>
-                      <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
-                        <span className="bg-slate-100 px-1.5 py-0.5 rounded text-[11px]">{item.category}</span>
-                        <span>Unit: {item.unit}</span>
-                      </div>
+                      <span className="text-xs font-semibold text-slate-700 bg-slate-100 px-2 py-0.5 rounded shrink-0">
+                        ₹{unitCost.toLocaleString()}
+                      </span>
                     </div>
-                  );
-                })}
-              </div>
-
-              {selectedCatalogItem && (
-                <div className="mt-4 p-4 rounded-xl bg-emerald-50/40 border border-emerald-100 space-y-3">
-                  <h4 className="text-xs font-semibold uppercase tracking-wider text-emerald-900">
-                    Configure Selected: {selectedCatalogItem.name}
-                  </h4>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                    <div>
-                      <label className="block text-xs font-medium text-slate-600 mb-1">Unit Selling Price (₹)</label>
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={catalogCost}
-                        onChange={(e) => setCatalogCost(e.target.value)}
-                        className="w-full px-3 py-1.5 text-sm bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-slate-600 mb-1">Demand Quantity</label>
-                      <input
-                        type="number"
-                        min="1"
-                        step="1"
-                        value={catalogQty}
-                        onChange={(e) => setCatalogQty(e.target.value)}
-                        className="w-full px-3 py-1.5 text-sm bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-slate-600 mb-1">Line Total</label>
-                      <div className="w-full px-3 py-1.5 text-sm font-semibold bg-white border border-slate-200 rounded-lg text-slate-800">
-                        ₹{((parseFloat(catalogCost) || 0) * (parseFloat(catalogQty) || 1)).toLocaleString()}
-                      </div>
+                    <div className="mt-2 flex items-center justify-between text-xs">
+                      <span className="bg-slate-100 px-1.5 py-0.5 rounded text-[11px] text-slate-500">
+                        {category}
+                      </span>
+                      <span
+                        className={`font-semibold ${
+                          outOfStock ? 'text-rose-600' : 'text-emerald-700'
+                        }`}
+                      >
+                        Available: {available}
+                      </span>
                     </div>
                   </div>
-                </div>
-              )}
-            </div>
-          ) : (
-            <form id="custom-delivery-product-form" onSubmit={handleAddCustomProduct} className="space-y-4">
-              <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">Product Name *</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Precision Aluminium Enclosure"
-                  value={customProduct.name}
-                  onChange={(e) => setCustomProduct({ ...customProduct, name: e.target.value })}
-                  className="w-full px-3.5 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:bg-white focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                />
-              </div>
+                );
+              })
+            )}
+          </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">SKU / Code</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. ENC-ALU-100"
-                    value={customProduct.sku}
-                    onChange={(e) => setCustomProduct({ ...customProduct, sku: e.target.value })}
-                    className="w-full px-3.5 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:bg-white focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 font-mono text-xs"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">Unit of Measure</label>
-                  <select
-                    value={customProduct.unit}
-                    onChange={(e) => setCustomProduct({ ...customProduct, unit: e.target.value })}
-                    className="w-full px-3.5 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:bg-white focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                  >
-                    <option value="Units">Units</option>
-                    <option value="Pcs">Pcs (Pieces)</option>
-                    <option value="Kg">Kg (Kilograms)</option>
-                    <option value="Box">Box</option>
-                    <option value="Cartridge">Cartridge</option>
-                    <option value="Drum">Drum</option>
-                    <option value="Liters">Liters</option>
-                    <option value="Meters">Meters</option>
-                  </select>
-                </div>
-              </div>
-
+          {selectedCatalogItem && (
+            <div className="mt-2 p-4 rounded-xl bg-emerald-50/40 border border-emerald-100 space-y-3">
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-emerald-900">
+                Configure: {selectedCatalogItem.name}
+              </h4>
+              <p className="text-xs text-emerald-800">
+                Free at source location: <strong>{selectedAvailable}</strong>
+              </p>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">Unit Price (₹) *</label>
+                  <label className="block text-xs font-medium text-slate-600 mb-1">Unit Price (₹)</label>
                   <input
                     type="number"
-                    required
                     min="0"
                     step="0.01"
-                    placeholder="0.00"
-                    value={customProduct.cost}
-                    onChange={(e) => setCustomProduct({ ...customProduct, cost: e.target.value })}
-                    className="w-full px-3.5 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:bg-white focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                    value={catalogCost}
+                    onChange={(e) => setCatalogCost(e.target.value)}
+                    className="w-full px-3 py-1.5 text-sm bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">Quantity *</label>
+                  <label className="block text-xs font-medium text-slate-600 mb-1">Ship Quantity</label>
                   <input
                     type="number"
-                    required
                     min="1"
+                    max={selectedAvailable}
                     step="1"
-                    value={customProduct.qty}
-                    onChange={(e) => setCustomProduct({ ...customProduct, qty: e.target.value })}
-                    className="w-full px-3.5 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:bg-white focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                    value={catalogQty}
+                    onChange={(e) => {
+                      setCatalogQty(e.target.value);
+                      setError(null);
+                    }}
+                    className="w-full px-3 py-1.5 text-sm bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">Total Price</label>
-                  <div className="w-full px-3.5 py-2 text-sm font-semibold bg-slate-100 border border-slate-200 rounded-lg text-slate-800">
-                    ₹{((parseFloat(customProduct.cost) || 0) * (parseFloat(customProduct.qty) || 1)).toLocaleString()}
+                  <label className="block text-xs font-medium text-slate-600 mb-1">Line Total</label>
+                  <div className="w-full px-3 py-1.5 text-sm font-semibold bg-white border border-slate-200 rounded-lg text-slate-800">
+                    ₹{((parseFloat(catalogCost) || 0) * (parseFloat(catalogQty) || 0)).toLocaleString()}
                   </div>
                 </div>
               </div>
-            </form>
+            </div>
           )}
         </div>
 
-        {/* Footer */}
         <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-slate-100 bg-slate-50/50">
           <button
             type="button"
@@ -308,27 +256,15 @@ export default function AddDeliveryProductModal({ isOpen, onClose, onAddProduct 
           >
             Cancel
           </button>
-
-          {activeTab === 'catalog' ? (
-            <button
-              type="button"
-              disabled={!selectedCatalogItem}
-              onClick={handleAddCatalogProduct}
-              className="px-5 py-2 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg shadow-xs transition-colors flex items-center gap-2 cursor-pointer"
-            >
-              <Plus className="w-4 h-4" />
-              Add to Delivery
-            </button>
-          ) : (
-            <button
-              type="submit"
-              form="custom-delivery-product-form"
-              className="px-5 py-2 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-xs transition-colors flex items-center gap-2 cursor-pointer"
-            >
-              <Plus className="w-4 h-4" />
-              Add Custom Item
-            </button>
-          )}
+          <button
+            type="button"
+            disabled={!selectedCatalogItem || selectedAvailable <= 0}
+            onClick={handleAddCatalogProduct}
+            className="px-5 py-2 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg shadow-xs transition-colors flex items-center gap-2 cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            Add to Delivery
+          </button>
         </div>
       </div>
     </div>
