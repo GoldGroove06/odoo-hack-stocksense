@@ -1,12 +1,8 @@
+import React from 'react'
 
-function Product() {
+const Product = () => {
   return (
-    <>
-    <div className="bg-black">
-    yoo
-    </div>
-    Product page
-     </>
+    <div>Product</div>
   )
 }
 
