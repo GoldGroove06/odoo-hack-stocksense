@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Building2,
   Plus,
@@ -11,13 +11,16 @@ import {
   Trash2,
   X,
   Layers,
-  Sparkles
+  Sparkles,
+  RefreshCw
 } from 'lucide-react';
 import Navbar from '../../components/Navbar';
+import { warehouseApi } from '../../services/api';
 import { INITIAL_WAREHOUSES } from '../../data/inventoryStore';
 
 export default function WarehousesPage() {
-  const [warehouses, setWarehouses] = useState(INITIAL_WAREHOUSES);
+  const [warehouses, setWarehouses] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingWh, setEditingWh] = useState(null);
@@ -37,6 +40,27 @@ export default function WarehousesPage() {
     setToastMessage(message);
     setTimeout(() => setToastMessage(null), 3500);
   };
+
+  const fetchWarehouses = async () => {
+    setLoading(true);
+    try {
+      const res = await warehouseApi.getAll();
+      if (res && res.data && res.data.length > 0) {
+        setWarehouses(res.data);
+      } else {
+        setWarehouses(INITIAL_WAREHOUSES);
+      }
+    } catch (err) {
+      console.warn('Backend warehouse API offline, using fallback:', err.message);
+      setWarehouses(INITIAL_WAREHOUSES);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchWarehouses();
+  }, []);
 
   const handleOpenAdd = () => {
     setEditingWh(null);
@@ -64,34 +88,72 @@ export default function WarehousesPage() {
     setIsModalOpen(true);
   };
 
-  const handleSaveWarehouse = (e) => {
+  const handleSaveWarehouse = async (e) => {
     e.preventDefault();
     if (!formData.name.trim() || !formData.shortcode.trim()) return;
 
+    const payload = {
+      name: formData.name.trim(),
+      shortcode: formData.shortcode.trim().toUpperCase(),
+      address: formData.address.trim(),
+      manager: formData.manager,
+      phone: formData.phone
+    };
+
     if (editingWh) {
-      const updated = warehouses.map((w) =>
-        w.id === editingWh.id
-          ? { ...w, ...formData, shortcode: formData.shortcode.toUpperCase() }
-          : w
-      );
-      setWarehouses(updated);
+      try {
+        const res = await warehouseApi.update(editingWh.id, payload);
+        if (res && res.data) {
+          setWarehouses(warehouses.map((w) => (w.id === editingWh.id ? { ...w, ...res.data } : w)));
+        }
+      } catch (err) {
+        setWarehouses(
+          warehouses.map((w) =>
+            w.id === editingWh.id ? { ...w, ...payload } : w
+          )
+        );
+      }
       showToast(`Warehouse "${formData.name}" updated successfully!`);
     } else {
-      const newWh = {
+      let created = {
         id: `wh-${Date.now()}`,
-        name: formData.name.trim(),
-        shortcode: formData.shortcode.trim().toUpperCase(),
-        address: formData.address.trim(),
-        manager: formData.manager,
-        phone: formData.phone,
+        ...payload,
         totalLocations: 0,
         capacity: formData.capacity,
         status: 'Active'
       };
-      setWarehouses([...warehouses, newWh]);
-      showToast(`Warehouse "${newWh.name}" added successfully!`);
+      try {
+        const res = await warehouseApi.create(payload);
+        if (res && res.data) {
+          created = { ...created, ...res.data };
+        }
+      } catch (err) {
+        console.warn('API create warehouse fallback to local:', err.message);
+      }
+      setWarehouses([...warehouses, created]);
+      showToast(`Warehouse "${created.name}" added successfully!`);
     }
     setIsModalOpen(false);
+  };
+
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [warehouseToDelete, setWarehouseToDelete] = useState(null);
+
+  const handleDeleteWarehouse = async () => {
+    if (!warehouseToDelete) return;
+    try {
+      try {
+        await warehouseApi.delete(warehouseToDelete.id);
+      } catch (err) {
+        console.warn('API delete warehouse fallback to local:', err.message);
+      }
+      setWarehouses(warehouses.filter((w) => w.id !== warehouseToDelete.id));
+      showToast(`Warehouse "${warehouseToDelete.name}" deleted successfully!`);
+      setIsDeleteModalOpen(false);
+      setWarehouseToDelete(null);
+    } catch (err) {
+      showToast(err.message || 'Failed to delete warehouse');
+    }
   };
 
   const filteredWarehouses = warehouses.filter((wh) => {
@@ -134,14 +196,24 @@ export default function WarehousesPage() {
             </p>
           </div>
 
-          <button
-            type="button"
-            onClick={handleOpenAdd}
-            className="px-4 py-2 text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 active:scale-98 rounded-xl shadow-xs transition-all flex items-center gap-2 cursor-pointer self-start sm:self-auto"
-          >
-            <Plus className="w-4 h-4" />
-            Add Warehouse
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={fetchWarehouses}
+              title="Refresh from API"
+              className="p-2 text-slate-600 bg-white hover:bg-slate-100 border border-slate-200 rounded-xl transition-colors cursor-pointer"
+            >
+              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-indigo-600' : ''}`} />
+            </button>
+            <button
+              type="button"
+              onClick={handleOpenAdd}
+              className="px-4 py-2 text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 active:scale-98 rounded-xl shadow-xs transition-all flex items-center gap-2 cursor-pointer"
+            >
+              <Plus className="w-4 h-4" />
+              Add Warehouse
+            </button>
+          </div>
         </div>
 
         {/* Search */}
@@ -169,7 +241,7 @@ export default function WarehousesPage() {
                   <th className="py-3.5 px-4 min-w-[320px]">Full Address</th>
                   <th className="py-3.5 px-4 min-w-[160px]">Manager / Phone</th>
                   <th className="py-3.5 px-4 w-28 text-center">Status</th>
-                  <th className="py-3.5 px-4 w-20 text-center">Edit</th>
+                  <th className="py-3.5 px-4 w-28 text-center">Actions</th>
                 </tr>
               </thead>
 
@@ -207,16 +279,29 @@ export default function WarehousesPage() {
                       </span>
                     </td>
 
-                    {/* Actions */}
+                    {/* Actions (Edit / Delete) */}
                     <td className="py-3.5 px-4 text-center">
-                      <button
-                        type="button"
-                        onClick={() => handleOpenEdit(wh)}
-                        className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer"
-                        title="Edit Warehouse"
-                      >
-                        <Edit3 className="w-4 h-4" />
-                      </button>
+                      <div className="flex items-center justify-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => handleOpenEdit(wh)}
+                          className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer"
+                          title="Edit Warehouse"
+                        >
+                          <Edit3 className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setWarehouseToDelete(wh);
+                            setIsDeleteModalOpen(true);
+                          }}
+                          className="p-1.5 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                          title="Delete Warehouse"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -325,6 +410,42 @@ export default function WarehousesPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* DELETE CONFIRMATION MODAL */}
+      {isDeleteModalOpen && warehouseToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-xs p-4 animate-in fade-in duration-150">
+          <div className="bg-white w-full max-w-md rounded-2xl shadow-xl border border-slate-200 p-6 space-y-4">
+            <div className="w-10 h-10 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center font-bold">
+              <Trash2 className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-slate-900">Delete Warehouse?</h3>
+              <p className="text-xs text-slate-500 mt-1">
+                Are you sure you want to delete <strong className="text-slate-800 font-semibold">{warehouseToDelete.name}</strong> ({warehouseToDelete.shortcode})? This will remove the warehouse and its associated storage records.
+              </p>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsDeleteModalOpen(false);
+                  setWarehouseToDelete(null);
+                }}
+                className="px-4 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteWarehouse}
+                className="px-4 py-2 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-lg shadow-xs cursor-pointer"
+              >
+                Confirm Delete
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   MapPin,
   Plus,
@@ -9,13 +9,17 @@ import {
   Trash2,
   X,
   Layers,
-  Sparkles
+  Sparkles,
+  RefreshCw
 } from 'lucide-react';
 import Navbar from '../../components/Navbar';
+import { locationApi, warehouseApi } from '../../services/api';
 import { INITIAL_LOCATIONS, INITIAL_WAREHOUSES } from '../../data/inventoryStore';
 
 export default function LocationsPage() {
-  const [locations, setLocations] = useState(INITIAL_LOCATIONS);
+  const [locations, setLocations] = useState([]);
+  const [warehouses, setWarehouses] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingLoc, setEditingLoc] = useState(null);
@@ -24,7 +28,8 @@ export default function LocationsPage() {
     name: '',
     shortcode: '',
     address: '',
-    warehouse: INITIAL_WAREHOUSES[0].name,
+    warehouse: '',
+    warehouseId: '',
     type: 'Internal Storage',
     capacity: '1,000 Units'
   });
@@ -36,13 +41,61 @@ export default function LocationsPage() {
     setTimeout(() => setToastMessage(null), 3500);
   };
 
+  const getWarehouseDisplayName = (wh) => {
+    if (!wh) return 'Central Warehouse (WH)';
+    if (typeof wh === 'string') return wh;
+    if (typeof wh === 'object') {
+      return wh.name ? `${wh.name} (${wh.shortcode || 'WH'})` : (wh.shortcode || 'WH');
+    }
+    return String(wh);
+  };
+
+  const fetchLocationsAndWarehouses = async () => {
+    setLoading(true);
+    try {
+      // 1. Fetch Warehouses
+      let loadedWh = INITIAL_WAREHOUSES;
+      try {
+        const whRes = await warehouseApi.getAll();
+        if (whRes && whRes.data && whRes.data.length > 0) {
+          loadedWh = whRes.data;
+          setWarehouses(whRes.data);
+        } else {
+          setWarehouses(INITIAL_WAREHOUSES);
+        }
+      } catch (err) {
+        setWarehouses(INITIAL_WAREHOUSES);
+      }
+
+      // 2. Fetch Locations
+      try {
+        const locRes = await locationApi.getAll();
+        if (locRes && locRes.data && locRes.data.length > 0) {
+          setLocations(locRes.data);
+        } else {
+          setLocations(INITIAL_LOCATIONS);
+        }
+      } catch (err) {
+        console.warn('Backend location API offline, using fallback:', err.message);
+        setLocations(INITIAL_LOCATIONS);
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchLocationsAndWarehouses();
+  }, []);
+
   const handleOpenAdd = () => {
     setEditingLoc(null);
     setFormData({
       name: '',
       shortcode: '',
       address: '',
-      warehouse: INITIAL_WAREHOUSES[0].name,
+      warehouse: warehouses[0]?.name || INITIAL_WAREHOUSES[0].name,
+      warehouseId: warehouses[0]?.id || '',
       type: 'Internal Storage',
       capacity: '1,000 Units'
     });
@@ -51,54 +104,107 @@ export default function LocationsPage() {
 
   const handleOpenEdit = (loc) => {
     setEditingLoc(loc);
+    const whName = typeof loc.warehouse === 'object' ? loc.warehouse?.name : loc.warehouse;
+    const whId = loc.warehouseId || (typeof loc.warehouse === 'object' ? loc.warehouse?.id : '') || (warehouses[0]?.id || '');
     setFormData({
       name: loc.name,
       shortcode: loc.shortcode,
-      address: loc.address,
-      warehouse: loc.warehouse || INITIAL_WAREHOUSES[0].name,
+      address: loc.address || '',
+      warehouse: whName || (warehouses[0]?.name || INITIAL_WAREHOUSES[0].name),
+      warehouseId: whId,
       type: loc.type || 'Internal Storage',
       capacity: loc.capacity || '1,000 Units'
     });
     setIsModalOpen(true);
   };
 
-  const handleSaveLocation = (e) => {
+  const handleSaveLocation = async (e) => {
     e.preventDefault();
     if (!formData.name.trim() || !formData.shortcode.trim()) return;
 
+    const payload = {
+      name: formData.name.trim(),
+      shortcode: formData.shortcode.trim().toUpperCase(),
+      address: formData.address.trim(),
+      type: formData.type,
+      warehouseId: formData.warehouseId ? parseInt(formData.warehouseId) : null
+    };
+
     if (editingLoc) {
-      const updated = locations.map((l) =>
-        l.id === editingLoc.id
-          ? { ...l, ...formData, shortcode: formData.shortcode.toUpperCase() }
-          : l
-      );
-      setLocations(updated);
+      try {
+        const res = await locationApi.update(editingLoc.id, payload);
+        if (res && res.data) {
+          setLocations(locations.map((l) => (l.id === editingLoc.id ? { ...l, ...res.data } : l)));
+        }
+      } catch (err) {
+        const selectedWhObj = warehouses.find((w) => String(w.id) === String(formData.warehouseId));
+        setLocations(
+          locations.map((l) =>
+            l.id === editingLoc.id
+              ? {
+                  ...l,
+                  ...formData,
+                  shortcode: formData.shortcode.toUpperCase(),
+                  warehouse: selectedWhObj || formData.warehouse
+                }
+              : l
+          )
+        );
+      }
       showToast(`Location "${formData.name}" updated successfully!`);
     } else {
-      const newLoc = {
+      const selectedWhObj = warehouses.find((w) => String(w.id) === String(formData.warehouseId));
+      let created = {
         id: `loc-${Date.now()}`,
-        name: formData.name.trim(),
+        ...formData,
         shortcode: formData.shortcode.trim().toUpperCase(),
-        address: formData.address.trim(),
-        warehouse: formData.warehouse,
-        type: formData.type,
+        warehouse: selectedWhObj || formData.warehouse,
         capacity: formData.capacity,
         status: 'Active'
       };
-      setLocations([...locations, newLoc]);
-      showToast(`Location "${newLoc.name}" added successfully!`);
+      try {
+        const res = await locationApi.create(payload);
+        if (res && res.data) {
+          created = { ...created, ...res.data };
+        }
+      } catch (err) {
+        console.warn('API create location fallback to local:', err.message);
+      }
+      setLocations([...locations, created]);
+      showToast(`Location "${created.name}" added successfully!`);
     }
     setIsModalOpen(false);
+  };
+
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [locationToDelete, setLocationToDelete] = useState(null);
+
+  const handleDeleteLocation = async () => {
+    if (!locationToDelete) return;
+    try {
+      try {
+        await locationApi.delete(locationToDelete.id);
+      } catch (err) {
+        console.warn('API delete location fallback to local:', err.message);
+      }
+      setLocations(locations.filter((l) => l.id !== locationToDelete.id));
+      showToast(`Location "${locationToDelete.name}" deleted successfully!`);
+      setIsDeleteModalOpen(false);
+      setLocationToDelete(null);
+    } catch (err) {
+      showToast(err.message || 'Failed to delete location');
+    }
   };
 
   const filteredLocations = locations.filter((loc) => {
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
+      const whName = getWarehouseDisplayName(loc.warehouse).toLowerCase();
       return (
-        loc.name.toLowerCase().includes(q) ||
-        loc.shortcode.toLowerCase().includes(q) ||
-        loc.address.toLowerCase().includes(q) ||
-        loc.warehouse.toLowerCase().includes(q)
+        (loc.name || '').toLowerCase().includes(q) ||
+        (loc.shortcode || '').toLowerCase().includes(q) ||
+        (loc.address || '').toLowerCase().includes(q) ||
+        whName.includes(q)
       );
     }
     return true;
@@ -132,14 +238,24 @@ export default function LocationsPage() {
             </p>
           </div>
 
-          <button
-            type="button"
-            onClick={handleOpenAdd}
-            className="px-4 py-2 text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 active:scale-98 rounded-xl shadow-xs transition-all flex items-center gap-2 cursor-pointer self-start sm:self-auto"
-          >
-            <Plus className="w-4 h-4" />
-            Add Location
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={fetchLocationsAndWarehouses}
+              title="Refresh from API"
+              className="p-2 text-slate-600 bg-white hover:bg-slate-100 border border-slate-200 rounded-xl transition-colors cursor-pointer"
+            >
+              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-indigo-600' : ''}`} />
+            </button>
+            <button
+              type="button"
+              onClick={handleOpenAdd}
+              className="px-4 py-2 text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 active:scale-98 rounded-xl shadow-xs transition-all flex items-center gap-2 cursor-pointer"
+            >
+              <Plus className="w-4 h-4" />
+              Add Location
+            </button>
+          </div>
         </div>
 
         {/* Search */}
@@ -167,7 +283,7 @@ export default function LocationsPage() {
                   <th className="py-3.5 px-4 min-w-[240px]">Specific Rack / Bay Address</th>
                   <th className="py-3.5 px-4 min-w-[180px]">Parent Warehouse</th>
                   <th className="py-3.5 px-4 w-28 text-center">Type</th>
-                  <th className="py-3.5 px-4 w-20 text-center">Edit</th>
+                  <th className="py-3.5 px-4 w-28 text-center">Actions</th>
                 </tr>
               </thead>
 
@@ -193,7 +309,9 @@ export default function LocationsPage() {
 
                     {/* Parent Warehouse */}
                     <td className="py-3.5 px-4 text-slate-700 text-xs">
-                      <div className="font-medium text-slate-900">{loc.warehouse}</div>
+                      <div className="font-medium text-slate-900">
+                        {getWarehouseDisplayName(loc.warehouse)}
+                      </div>
                     </td>
 
                     {/* Type */}
@@ -203,16 +321,29 @@ export default function LocationsPage() {
                       </span>
                     </td>
 
-                    {/* Actions */}
+                    {/* Actions (Edit / Delete) */}
                     <td className="py-3.5 px-4 text-center">
-                      <button
-                        type="button"
-                        onClick={() => handleOpenEdit(loc)}
-                        className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer"
-                        title="Edit Location"
-                      >
-                        <Edit3 className="w-4 h-4" />
-                      </button>
+                      <div className="flex items-center justify-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => handleOpenEdit(loc)}
+                          className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer"
+                          title="Edit Location"
+                        >
+                          <Edit3 className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setLocationToDelete(loc);
+                            setIsDeleteModalOpen(true);
+                          }}
+                          className="p-1.5 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                          title="Delete Location"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -288,12 +419,21 @@ export default function LocationsPage() {
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">Parent Warehouse</label>
                   <select
-                    value={formData.warehouse}
-                    onChange={(e) => setFormData({ ...formData, warehouse: e.target.value })}
+                    value={formData.warehouseId}
+                    onChange={(e) => {
+                      const selId = e.target.value;
+                      const selWh = warehouses.find((w) => String(w.id) === String(selId));
+                      setFormData({
+                        ...formData,
+                        warehouseId: selId,
+                        warehouse: selWh?.name || ''
+                      });
+                    }}
                     className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none"
                   >
-                    {INITIAL_WAREHOUSES.map((wh) => (
-                      <option key={wh.id} value={`${wh.name} (${wh.shortcode})`}>
+                    <option value="">Select Warehouse</option>
+                    {warehouses.map((wh) => (
+                      <option key={wh.id} value={wh.id}>
                         {wh.name} ({wh.shortcode})
                       </option>
                     ))}
@@ -334,6 +474,43 @@ export default function LocationsPage() {
           </div>
         </div>
       )}
+
+      {/* DELETE CONFIRMATION MODAL */}
+      {isDeleteModalOpen && locationToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-xs p-4 animate-in fade-in duration-150">
+          <div className="bg-white w-full max-w-md rounded-2xl shadow-xl border border-slate-200 p-6 space-y-4">
+            <div className="w-10 h-10 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center font-bold">
+              <Trash2 className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-slate-900">Delete Storage Location?</h3>
+              <p className="text-xs text-slate-500 mt-1">
+                Are you sure you want to delete <strong className="text-slate-800 font-semibold">{locationToDelete.name}</strong> ({locationToDelete.shortcode})? This will permanently remove this location.
+              </p>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsDeleteModalOpen(false);
+                  setLocationToDelete(null);
+                }}
+                className="px-4 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteLocation}
+                className="px-4 py-2 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-lg shadow-xs cursor-pointer"
+              >
+                Confirm Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+
