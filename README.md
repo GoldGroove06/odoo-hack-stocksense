@@ -5,7 +5,7 @@
 [![Database](https://img.shields.io/badge/Database-PostgreSQL%20%7C%20Prisma%20ORM-4169E1?logo=postgresql&logoColor=white)](https://www.prisma.io/)
 [![License](https://img.shields.io/badge/License-ISC-blue.svg)](LICENSE)
 
-**StockSense** is an enterprise-grade, Odoo-inspired Inventory and Warehouse Operations Management system designed for modern supply chains. It provides end-to-end traceability, real-time stock valuation using Weighted Average Cost (WAC), multi-warehouse routing, inward receipts, outward delivery orders, internal stock transfers, and automated physical count adjustments.
+**StockSense** is an enterprise-grade, Inventory and Warehouse Operations Management system designed for modern supply chains. It provides end-to-end traceability, real-time stock valuation using Weighted Average Cost (WAC), multi-warehouse routing, inward receipts, outward delivery orders, internal stock transfers, and automated physical count adjustments.
 
 ---
 
